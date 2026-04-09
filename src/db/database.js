@@ -8,27 +8,23 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // SSL is required for Railway, Render, and most cloud PostgreSQL providers
   ssl: process.env.NODE_ENV === 'production'
     ? { rejectUnauthorized: false }
     : false,
-  max: 10,                // max connections in pool
+  max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
 
 pool.on('connect', () => console.log('[DB] PostgreSQL connected'));
 pool.on('error', (err) => {
-  console.error('[DB] Unexpected error on idle client:', err.message);
+  console.error('[DB] Unexpected error:', err.message);
 });
 
-/**
- * Initialize all database tables
- */
 async function initializeDatabase() {
   const client = await pool.connect();
   try {
-    // Users table
+    // Users table — with separate salt column for security transparency
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id            TEXT PRIMARY KEY,
@@ -36,6 +32,7 @@ async function initializeDatabase() {
         email         TEXT UNIQUE NOT NULL,
         phone         TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
+        salt          TEXT NOT NULL,
         role          TEXT DEFAULT 'passenger',
         is_verified   BOOLEAN DEFAULT false,
         is_active     BOOLEAN DEFAULT true,
@@ -45,7 +42,11 @@ async function initializeDatabase() {
       );
     `);
 
-    // Login attempts — for monitoring brute-force
+    // Add salt column if it doesn't exist (for existing deployments)
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy';
+    `);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS login_attempts (
         id            SERIAL PRIMARY KEY,
@@ -56,18 +57,6 @@ async function initializeDatabase() {
       );
     `);
 
-    // Refresh tokens — for future token rotation
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS refresh_tokens (
-        id          TEXT PRIMARY KEY,
-        user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        token_hash  TEXT NOT NULL,
-        expires_at  TIMESTAMPTZ NOT NULL,
-        created_at  TIMESTAMPTZ DEFAULT NOW()
-      );
-    `);
-
-    // Index for faster email lookups
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     `);
@@ -78,25 +67,15 @@ async function initializeDatabase() {
   }
 }
 
-/**
- * Run an INSERT / UPDATE / DELETE query
- */
 async function dbRun(sql, params = []) {
-  const result = await pool.query(sql, params);
-  return result;
+  return await pool.query(sql, params);
 }
 
-/**
- * Get a single row
- */
 async function dbGet(sql, params = []) {
   const result = await pool.query(sql, params);
   return result.rows[0] || null;
 }
 
-/**
- * Get all rows
- */
 async function dbAll(sql, params = []) {
   const result = await pool.query(sql, params);
   return result.rows;

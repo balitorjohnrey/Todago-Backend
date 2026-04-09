@@ -3,13 +3,11 @@ const { body, validationResult } = require('express-validator');
 const jwt      = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 
-const { dbRun, dbGet }                              = require('../db/database');
-const { hashPassword, verifyPassword,
-        validatePasswordStrength }                   = require('../utils/password');
+const { dbRun, dbGet }                                        = require('../db/database');
+const { generateSalt, hashPassword,
+        verifyPassword, validatePasswordStrength }             = require('../utils/password');
 
 const router = express.Router();
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function generateToken(userId) {
   return jwt.sign({ sub: userId }, process.env.JWT_SECRET, {
@@ -20,18 +18,17 @@ function generateToken(userId) {
 }
 
 function sanitizeUser(user) {
-  // Never expose password_hash to the client
-  const { password_hash, ...safe } = user;
+  // Never send password_hash, salt, or pepper to client
+  const { password_hash, salt, ...safe } = user;
   return safe;
 }
 
 function clientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]
-    || req.socket?.remoteAddress
-    || 'unknown';
+    || req.socket?.remoteAddress || 'unknown';
 }
 
-// ─── POST /api/auth/register ───────────────────────────────────────────────────
+// ── POST /api/auth/register ───────────────────────────────────────────────────
 router.post('/register', [
   body('fullName').trim().isLength({ min: 2, max: 100 }).withMessage('Full name must be 2–100 characters'),
   body('email').trim().isEmail().normalizeEmail().withMessage('Enter a valid email address'),
@@ -46,36 +43,35 @@ router.post('/register', [
   const { fullName, email, phone, password } = req.body;
 
   try {
-    // Password strength check
     const strengthErrors = validatePasswordStrength(password);
     if (strengthErrors.length > 0) {
       return res.status(400).json({ success: false, message: strengthErrors[0] });
     }
 
-    // Duplicate email check
-    const existingEmail = await dbGet(
-      'SELECT id FROM users WHERE email = $1', [email.toLowerCase()]
-    );
+    const existingEmail = await dbGet('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
     if (existingEmail) {
       return res.status(409).json({ success: false, message: 'An account with this email already exists' });
     }
 
-    // Duplicate phone check
-    const existingPhone = await dbGet(
-      'SELECT id FROM users WHERE phone = $1', [phone]
-    );
+    const existingPhone = await dbGet('SELECT id FROM users WHERE phone = $1', [phone]);
     if (existingPhone) {
       return res.status(409).json({ success: false, message: 'An account with this phone number already exists' });
     }
 
-    // Hash password (pepper + bcrypt auto-salt)
-    const passwordHash = await hashPassword(password);
+    // Step 1: Generate unique random salt for this user
+    const salt = generateSalt();
+
+    // Step 2: Hash using pepper + salt + password
+    const passwordHash = await hashPassword(password, salt);
+
     const userId = uuidv4();
 
+    // Step 3: Store username, hashed password, AND salt in DB
+    // Pepper is NOT stored — it lives only in environment variables
     await dbRun(
-      `INSERT INTO users (id, full_name, email, phone, password_hash)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [userId, fullName.trim(), email.toLowerCase(), phone.trim(), passwordHash]
+      `INSERT INTO users (id, full_name, email, phone, password_hash, salt)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, fullName.trim(), email.toLowerCase(), phone.trim(), passwordHash, salt]
     );
 
     const user  = await dbGet('SELECT * FROM users WHERE id = $1', [userId]);
@@ -96,7 +92,7 @@ router.post('/register', [
   }
 });
 
-// ─── POST /api/auth/login ──────────────────────────────────────────────────────
+// ── POST /api/auth/login ──────────────────────────────────────────────────────
 router.post('/login', [
   body('email').trim().isEmail().normalizeEmail().withMessage('Enter a valid email address'),
   body('password').notEmpty().withMessage('Password is required'),
@@ -115,9 +111,14 @@ router.post('/login', [
       [email.toLowerCase()]
     );
 
-    // Always run bcrypt to prevent timing attacks (even for unknown emails)
+    // Always run bcrypt even if user not found (prevent timing attacks)
     const dummyHash = '$2b$12$invalidhashfortimingattackprevention000000000000000000000';
-    const passwordMatch = await verifyPassword(password, user ? user.password_hash : dummyHash);
+    const dummySalt = 'dummy_salt_for_timing_attack_prevention';
+    const passwordMatch = await verifyPassword(
+      password,
+      user ? user.password_hash : dummyHash,
+      user ? user.salt : dummySalt
+    );
 
     if (!user || !passwordMatch) {
       await dbRun(
@@ -127,7 +128,6 @@ router.post('/login', [
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
-    // Update last login
     await dbRun('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id]);
     await dbRun(
       'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
@@ -150,12 +150,10 @@ router.post('/login', [
   }
 });
 
-// ─── GET /api/auth/me ──────────────────────────────────────────────────────────
+// ── GET /api/auth/me ──────────────────────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const user = await dbGet(
-      'SELECT * FROM users WHERE id = $1 AND is_active = true', [req.userId]
-    );
+    const user = await dbGet('SELECT * FROM users WHERE id = $1 AND is_active = true', [req.userId]);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     return res.json({ success: true, user: sanitizeUser(user) });
   } catch (error) {
@@ -163,14 +161,12 @@ router.get('/me', requireAuth, async (req, res) => {
   }
 });
 
-// ─── POST /api/auth/logout ─────────────────────────────────────────────────────
+// ── POST /api/auth/logout ─────────────────────────────────────────────────────
 router.post('/logout', requireAuth, (req, res) => {
-  // JWT is stateless — client deletes the token locally.
   return res.json({ success: true, message: 'Logged out successfully' });
 });
 
-// ─── PUT /api/auth/role ────────────────────────────────────────────────────────
-// Save selected role (passenger / driver / operator)
+// ── PUT /api/auth/role ────────────────────────────────────────────────────────
 router.put('/role', requireAuth, [
   body('role').isIn(['passenger', 'driver', 'operator']).withMessage('Invalid role'),
 ], async (req, res) => {
@@ -189,7 +185,7 @@ router.put('/role', requireAuth, [
   }
 });
 
-// ─── Auth Middleware ───────────────────────────────────────────────────────────
+// ── Auth Middleware ───────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
@@ -197,8 +193,7 @@ function requireAuth(req, res, next) {
   }
   try {
     const payload = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET, {
-      issuer  : 'todago-api',
-      audience: 'todago-app',
+      issuer: 'todago-api', audience: 'todago-app',
     });
     req.userId = payload.sub;
     next();

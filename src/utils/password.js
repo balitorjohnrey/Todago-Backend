@@ -1,17 +1,19 @@
 /**
  * TodaGo Password Security — Pepper + Salt + bcrypt
  *
- * Layer 1 — PEPPER  : Secret string from env, prepended before hashing.
- *                      Never stored in DB. Useless without the server secret.
- * Layer 2 — SALT    : Auto-generated per user by bcrypt. Embedded in the hash.
- *                      Prevents rainbow table attacks.
- * Layer 3 — BCRYPT  : Slow hashing algorithm with cost factor.
+ * Layer 1 — PEPPER  : Secret string from .env, prepended to password.
+ *                      NEVER stored in DB. Server-side secret only.
+ * Layer 2 — SALT    : Random unique string generated per user.
+ *                      Stored in DB (safe to store — only useful with pepper+hash).
+ * Layer 3 — BCRYPT  : Slow hashing with cost factor 12.
  *                      Makes brute-force computationally expensive.
  *
- * Stored in DB:  bcrypt( PEPPER + "::" + password,  auto-salt,  cost=12 )
+ * Final hash stored: bcrypt( pepper + salt + password )
+ * Salt stored separately in DB for transparency and project requirements.
  */
 
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 const PEPPER = process.env.PASSWORD_PEPPER;
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
@@ -21,34 +23,45 @@ if (!PEPPER || PEPPER.length < 16) {
 }
 
 /**
- * Hash a plain password with pepper + bcrypt (auto-salt included)
+ * Generate a random salt (32 hex characters = 16 bytes)
+ * @returns {string} random salt
+ */
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex'); // 32-char hex string
+}
+
+/**
+ * Hash a plain password with pepper + salt + bcrypt
  * @param {string} plainPassword
+ * @param {string} salt - unique salt for this user
  * @returns {Promise<string>} bcrypt hash (safe to store in DB)
  */
-async function hashPassword(plainPassword) {
+async function hashPassword(plainPassword, salt) {
   if (!plainPassword || typeof plainPassword !== 'string') {
     throw new Error('Password must be a non-empty string');
   }
-  const peppered = `${PEPPER}::${plainPassword}`;
-  return await bcrypt.hash(peppered, BCRYPT_ROUNDS);
+  // Combine: PEPPER (secret) + SALT (stored) + PASSWORD (input)
+  const combined = `${PEPPER}:${salt}:${plainPassword}`;
+  return await bcrypt.hash(combined, BCRYPT_ROUNDS);
 }
 
 /**
- * Verify plain password against stored hash
+ * Verify plain password against stored hash + salt
  * @param {string} plainPassword
  * @param {string} storedHash
+ * @param {string} storedSalt
  * @returns {Promise<boolean>}
  */
-async function verifyPassword(plainPassword, storedHash) {
-  if (!plainPassword || !storedHash) return false;
-  const peppered = `${PEPPER}::${plainPassword}`;
-  return await bcrypt.compare(peppered, storedHash);
+async function verifyPassword(plainPassword, storedHash, storedSalt) {
+  if (!plainPassword || !storedHash || !storedSalt) return false;
+  const combined = `${PEPPER}:${storedSalt}:${plainPassword}`;
+  return await bcrypt.compare(combined, storedHash);
 }
 
 /**
- * Validate password strength — returns array of error messages
+ * Validate password strength
  * @param {string} password
- * @returns {string[]}
+ * @returns {string[]} array of error messages (empty = valid)
  */
 function validatePasswordStrength(password) {
   const errors = [];
@@ -60,4 +73,4 @@ function validatePasswordStrength(password) {
   return errors;
 }
 
-module.exports = { hashPassword, verifyPassword, validatePasswordStrength };
+module.exports = { generateSalt, hashPassword, verifyPassword, validatePasswordStrength };

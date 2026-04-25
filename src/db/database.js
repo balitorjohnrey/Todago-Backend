@@ -8,7 +8,9 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: process.env.NODE_ENV === 'production'
+    ? { rejectUnauthorized: false }
+    : false,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
@@ -20,9 +22,9 @@ pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 async function initializeDatabase() {
   const client = await pool.connect();
   try {
-    await client.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+    await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
 
-    // ── COMMUTERS (Passengers) ────────────────────────────────────────────────
+    // ── COMMUTERS ─────────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS commuters (
         commuter_id   TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -37,9 +39,11 @@ async function initializeDatabase() {
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
-      );
+      )
     `);
-    await client.query(`ALTER TABLE commuters ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy';`);
+    await client.query(
+      `ALTER TABLE commuters ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`
+    );
 
     // ── TODA ASSOCIATIONS ─────────────────────────────────────────────────────
     await client.query(`
@@ -54,7 +58,7 @@ async function initializeDatabase() {
         is_verified      BOOLEAN DEFAULT false,
         is_active        BOOLEAN DEFAULT true,
         created_at       TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── OPERATORS ─────────────────────────────────────────────────────────────
@@ -74,9 +78,11 @@ async function initializeDatabase() {
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
-      );
+      )
     `);
-    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy';`);
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`
+    );
 
     // ── DRIVERS ───────────────────────────────────────────────────────────────
     await client.query(`
@@ -90,7 +96,8 @@ async function initializeDatabase() {
         toda_body_number TEXT UNIQUE NOT NULL,
         password_hash    TEXT NOT NULL,
         salt             TEXT NOT NULL DEFAULT 'legacy',
-        status           TEXT DEFAULT 'offline' CHECK (status IN ('online','offline','on_trip','suspended')),
+        status           TEXT DEFAULT 'offline'
+                           CHECK (status IN ('online','offline','on_trip','suspended')),
         avg_rating       FLOAT DEFAULT 0.0,
         total_trips      INT DEFAULT 0,
         is_verified      BOOLEAN DEFAULT false,
@@ -99,9 +106,11 @@ async function initializeDatabase() {
         created_at       TIMESTAMPTZ DEFAULT NOW(),
         updated_at       TIMESTAMPTZ DEFAULT NOW(),
         last_login       TIMESTAMPTZ
-      );
+      )
     `);
-    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy';`);
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`
+    );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────
     await client.query(`
@@ -112,36 +121,47 @@ async function initializeDatabase() {
         plate_no      TEXT UNIQUE NOT NULL,
         body_number   TEXT UNIQUE NOT NULL,
         vehicle_color TEXT,
-        status        TEXT DEFAULT 'inactive' CHECK (status IN ('active','inactive','maintenance')),
+        status        TEXT DEFAULT 'inactive'
+                        CHECK (status IN ('active','inactive','maintenance')),
         created_at    TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── SUBSCRIPTION PLANS ────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS subscription_plans (
-        plan_id      TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-        plan_name    TEXT NOT NULL,
-        plan_type    TEXT NOT NULL CHECK (plan_type IN ('driver','operator','commuter')),
-        price        NUMERIC(10,2) NOT NULL,
+        plan_id       TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        plan_name     TEXT UNIQUE NOT NULL,
+        plan_type     TEXT NOT NULL CHECK (plan_type IN ('driver','operator','commuter')),
+        price         NUMERIC(10,2) NOT NULL,
         duration_days INT NOT NULL,
-        features     TEXT[],
-        is_active    BOOLEAN DEFAULT true,
-        created_at   TIMESTAMPTZ DEFAULT NOW()
-      );
+        features      TEXT[],
+        is_active     BOOLEAN DEFAULT true,
+        created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
     `);
 
-    // Insert default plans
-    await client.query(`
-      INSERT INTO subscription_plans (plan_name, plan_type, price, duration_days, features)
-      VALUES
-        ('Driver Basic',    'driver',   0.00,  30,  ARRAY['Accept rides','GPS tracking','Earnings dashboard']),
-        ('Driver Pro',      'driver',  299.00, 30,  ARRAY['All Basic features','Priority dispatch','Lower commission (8%)','Performance analytics']),
-        ('Operator Basic',  'operator', 0.00,  30,  ARRAY['Fleet dashboard','Driver management','Basic reports']),
-        ('Operator Pro',    'operator',999.00, 30,  ARRAY['All Basic features','Live fleet map','Advanced analytics','Reduced commission (8%)','Priority support']),
-        ('Commuter Plus',   'commuter', 99.00, 30,  ARRAY['Advance booking','Ride history','Priority matching','Exclusive discounts'])
-      ON CONFLICT DO NOTHING;
-    `);
+    // Seed default plans — safe to run multiple times (UNIQUE on plan_name)
+    const plans = [
+      ['Driver Basic',   'driver',    0.00, 30,
+       '{Accept rides,GPS tracking,Earnings dashboard}'],
+      ['Driver Pro',     'driver',  299.00, 30,
+       '{All Basic features,Priority dispatch,Lower commission 8%,Performance analytics}'],
+      ['Operator Basic', 'operator',  0.00, 30,
+       '{Fleet dashboard,Driver management,Basic reports}'],
+      ['Operator Pro',   'operator',999.00, 30,
+       '{All Basic features,Live fleet map,Advanced analytics,Reduced commission 8%,Priority support}'],
+      ['Commuter Plus',  'commuter', 99.00, 30,
+       '{Advance booking,Ride history,Priority matching,Exclusive discounts}'],
+    ];
+    for (const [name, type, price, days, features] of plans) {
+      await client.query(
+        `INSERT INTO subscription_plans (plan_name, plan_type, price, duration_days, features)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (plan_name) DO NOTHING`,
+        [name, type, price, days, features]
+      );
+    }
 
     // ── USER SUBSCRIPTIONS ────────────────────────────────────────────────────
     await client.query(`
@@ -150,15 +170,18 @@ async function initializeDatabase() {
         user_id         TEXT NOT NULL,
         user_type       TEXT NOT NULL CHECK (user_type IN ('driver','operator','commuter')),
         plan_id         TEXT REFERENCES subscription_plans(plan_id) ON DELETE SET NULL,
-        status          TEXT DEFAULT 'active' CHECK (status IN ('active','expired','cancelled')),
+        status          TEXT DEFAULT 'active'
+                          CHECK (status IN ('active','expired','cancelled')),
         started_at      TIMESTAMPTZ DEFAULT NOW(),
         expires_at      TIMESTAMPTZ NOT NULL,
         payment_method  TEXT DEFAULT 'gcash',
         amount_paid     NUMERIC(10,2) DEFAULT 0,
         created_at      TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_sub_user ON subscriptions(user_id, user_type);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_sub_user ON subscriptions(user_id, user_type)`
+    );
 
     // ── COMMISSION RATES ──────────────────────────────────────────────────────
     await client.query(`
@@ -168,22 +191,27 @@ async function initializeDatabase() {
         plan_type      TEXT NOT NULL CHECK (plan_type IN ('basic','pro','none')),
         rate_percent   NUMERIC(5,2) NOT NULL,
         description    TEXT,
-        effective_from TIMESTAMPTZ DEFAULT NOW(),
-        is_active      BOOLEAN DEFAULT true
-      );
+        is_active      BOOLEAN DEFAULT true,
+        UNIQUE(user_type, plan_type)
+      )
     `);
 
-    await client.query(`
-      INSERT INTO commission_rates (user_type, plan_type, rate_percent, description)
-      VALUES
-        ('driver',   'none',  10.00, 'Standard driver commission — no subscription'),
-        ('driver',   'basic', 10.00, 'Driver Basic plan commission'),
-        ('driver',   'pro',    8.00, 'Driver Pro plan — reduced commission'),
-        ('operator', 'none',  10.00, 'Standard operator commission — no subscription'),
-        ('operator', 'basic', 10.00, 'Operator Basic plan commission'),
-        ('operator', 'pro',    8.00, 'Operator Pro plan — reduced commission')
-      ON CONFLICT DO NOTHING;
-    `);
+    const rates = [
+      ['driver',   'none',  10.00, 'Standard driver commission'],
+      ['driver',   'basic', 10.00, 'Driver Basic commission'],
+      ['driver',   'pro',    8.00, 'Driver Pro reduced commission'],
+      ['operator', 'none',  10.00, 'Standard operator commission'],
+      ['operator', 'basic', 10.00, 'Operator Basic commission'],
+      ['operator', 'pro',    8.00, 'Operator Pro reduced commission'],
+    ];
+    for (const [utype, ptype, rate, desc] of rates) {
+      await client.query(
+        `INSERT INTO commission_rates (user_type, plan_type, rate_percent, description)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (user_type, plan_type) DO NOTHING`,
+        [utype, ptype, rate, desc]
+      );
+    }
 
     // ── COMMISSION LEDGER ─────────────────────────────────────────────────────
     await client.query(`
@@ -196,13 +224,18 @@ async function initializeDatabase() {
         commission_pct NUMERIC(5,2) NOT NULL,
         commission_amt NUMERIC(10,2) NOT NULL,
         driver_payout  NUMERIC(10,2) NOT NULL,
-        status         TEXT DEFAULT 'pending' CHECK (status IN ('pending','paid','disputed')),
+        status         TEXT DEFAULT 'pending'
+                         CHECK (status IN ('pending','paid','disputed')),
         paid_at        TIMESTAMPTZ,
         created_at     TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_driver ON commission_ledger(driver_id);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_toda ON commission_ledger(toda_id);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_ledger_driver ON commission_ledger(driver_id)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_ledger_toda ON commission_ledger(toda_id)`
+    );
 
     // ── TRIPS ─────────────────────────────────────────────────────────────────
     await client.query(`
@@ -212,17 +245,20 @@ async function initializeDatabase() {
         tricycle_id       TEXT REFERENCES tricycles(tricycle_id) ON DELETE SET NULL,
         driver_id         TEXT REFERENCES drivers(driver_id) ON DELETE SET NULL,
         route_segment     TEXT,
-        service_type      TEXT DEFAULT 'solo' CHECK (service_type IN ('solo','shared','express')),
+        service_type      TEXT DEFAULT 'solo'
+                            CHECK (service_type IN ('solo','shared','express')),
         pickup_location   TEXT,
         destination       TEXT,
         fare              NUMERIC(10,2) DEFAULT 0,
-        payment_method    TEXT DEFAULT 'cash' CHECK (payment_method IN ('cash','gcash','maya','wallet')),
-        status            TEXT DEFAULT 'requested' CHECK (status IN ('requested','accepted','pickup','ongoing','completed','cancelled')),
+        payment_method    TEXT DEFAULT 'cash'
+                            CHECK (payment_method IN ('cash','gcash','maya','wallet')),
+        status            TEXT DEFAULT 'requested'
+                            CHECK (status IN ('requested','accepted','pickup','ongoing','completed','cancelled')),
         request_timestamp TIMESTAMPTZ DEFAULT NOW(),
         pickup_timestamp  TIMESTAMPTZ,
         end_timestamp     TIMESTAMPTZ,
         created_at        TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────
@@ -234,7 +270,7 @@ async function initializeDatabase() {
         longitude   FLOAT NOT NULL,
         speed_kmh   FLOAT DEFAULT 0,
         timestamp   TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── PERFORMANCE REPORTS ───────────────────────────────────────────────────
@@ -247,7 +283,7 @@ async function initializeDatabase() {
         total_trips   INT DEFAULT 0,
         gross_revenue NUMERIC(12,2) DEFAULT 0,
         created_at    TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── FEEDBACK ──────────────────────────────────────────────────────────────
@@ -260,7 +296,7 @@ async function initializeDatabase() {
         rating_score INT NOT NULL CHECK (rating_score BETWEEN 1 AND 5),
         comments     TEXT,
         created_at   TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── PEAK HOUR LOGS ────────────────────────────────────────────────────────
@@ -272,7 +308,7 @@ async function initializeDatabase() {
         trip_count    INT DEFAULT 0,
         avg_wait_time FLOAT DEFAULT 0,
         logged_at     TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── LOGIN ATTEMPTS ────────────────────────────────────────────────────────
@@ -284,24 +320,45 @@ async function initializeDatabase() {
         ip_address   TEXT,
         success      BOOLEAN DEFAULT false,
         attempted_at TIMESTAMPTZ DEFAULT NOW()
-      );
+      )
     `);
 
     // ── INDEXES ───────────────────────────────────────────────────────────────
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_commuters_email ON commuters(email);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_email ON drivers(email);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_body ON drivers(toda_body_number);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_operators_email ON operators(email);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_trips_driver ON trips(driver_id);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_commuters_email ON commuters(email)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_drivers_email ON drivers(email)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_drivers_body ON drivers(toda_body_number)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_operators_email ON operators(email)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_trips_driver ON trips(driver_id)`
+    );
 
-    console.log('[DB] All tables initialized ✅');
+    console.log('[DB] All tables initialized successfully ✅');
+  } catch (err) {
+    console.error('[DB] Initialization error:', err.message);
+    throw err;
   } finally {
     client.release();
   }
 }
 
-async function dbRun(sql, params = []) { return await pool.query(sql, params); }
-async function dbGet(sql, params = []) { const r = await pool.query(sql, params); return r.rows[0] || null; }
-async function dbAll(sql, params = []) { const r = await pool.query(sql, params); return r.rows; }
+async function dbRun(sql, params = []) {
+  return await pool.query(sql, params);
+}
+async function dbGet(sql, params = []) {
+  const r = await pool.query(sql, params);
+  return r.rows[0] || null;
+}
+async function dbAll(sql, params = []) {
+  const r = await pool.query(sql, params);
+  return r.rows;
+}
 
 module.exports = { pool, initializeDatabase, dbRun, dbGet, dbAll };

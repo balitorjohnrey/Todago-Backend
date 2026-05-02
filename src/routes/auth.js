@@ -10,7 +10,7 @@ const { generateSalt, hashPassword,
 const router = express.Router();
 
 function generateToken(userId) {
-  return jwt.sign({ sub: userId }, process.env.JWT_SECRET, {
+  return jwt.sign({ sub: userId, role: 'passenger' }, process.env.JWT_SECRET, {
     expiresIn : process.env.JWT_EXPIRES_IN || '7d',
     issuer    : 'todago-api',
     audience  : 'todago-app',
@@ -53,24 +53,23 @@ router.post('/register', [
       return res.status(409).json({ success: false, message: 'An account with this email already exists' });
     }
 
-    const existingPhone = await dbGet('SELECT id FROM users WHERE phone = $1', [phone]);
+    const existingPhone = await dbGet('SELECT id FROM users WHERE phone = $1', [phone.trim()]);
     if (existingPhone) {
       return res.status(409).json({ success: false, message: 'An account with this phone number already exists' });
     }
 
-    // Step 1: Generate unique random salt for this user
+    // Generate unique random salt for this user
     const salt = generateSalt();
 
-    // Step 2: Hash using pepper + salt + password
+    // Hash using pepper + salt + password
     const passwordHash = await hashPassword(password, salt);
 
     const userId = uuidv4();
 
-    // Step 3: Store username, hashed password, AND salt in DB
-    // Pepper is NOT stored — it lives only in environment variables
+    // Store user with hashed password AND salt — pepper stays in env only
     await dbRun(
-      `INSERT INTO users (id, full_name, email, phone, password_hash, salt)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO users (id, full_name, email, phone, password_hash, salt, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)`,
       [userId, fullName.trim(), email.toLowerCase(), phone.trim(), passwordHash, salt]
     );
 
@@ -106,25 +105,36 @@ router.post('/login', [
   const ip = clientIp(req);
 
   try {
+    // ── FIX: Don't filter by is_active in SQL — handle it in code.
+    // If is_active is NULL (not explicitly set), SQL "AND is_active = true"
+    // silently drops the row, making every password appear to "work" because
+    // bcrypt then runs against the dummy hash/salt which can behave
+    // unpredictably with some bcrypt implementations.
     const user = await dbGet(
-      'SELECT * FROM users WHERE email = $1 AND is_active = true',
+      'SELECT * FROM users WHERE email = $1',
       [email.toLowerCase()]
     );
 
+    // Check is_active separately so we can give a clear error path
+    const accountDisabled = user && user.is_active === false;
+
     // Always run bcrypt even if user not found (prevent timing attacks)
-    const dummyHash = '$2b$12$invalidhashfortimingattackprevention000000000000000000000';
-    const dummySalt = 'dummy_salt_for_timing_attack_prevention';
+    const dummyHash = '$2b$12$dummyhashfortimingattackXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+    const dummySalt = 'a1b2c3d4e5f6a7b8c9d0e1f2';
+
     const passwordMatch = await verifyPassword(
       password,
-      user ? user.password_hash : dummyHash,
-      user ? user.salt : dummySalt
+      (user && !accountDisabled) ? user.password_hash : dummyHash,
+      (user && !accountDisabled) ? user.salt         : dummySalt
     );
 
-    if (!user || !passwordMatch) {
+    if (!user || accountDisabled || !passwordMatch) {
       await dbRun(
         'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
         [email, ip, false]
-      );
+      ).catch(() => {}); // Don't let logging failure break the response
+
+      // Same error message for all failure cases (don't reveal which field is wrong)
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
@@ -132,7 +142,7 @@ router.post('/login', [
     await dbRun(
       'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
       [email, ip, true]
-    );
+    ).catch(() => {});
 
     const token = generateToken(user.id);
     console.log(`[Auth] Login: ${email} from ${ip}`);
@@ -153,7 +163,10 @@ router.post('/login', [
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const user = await dbGet('SELECT * FROM users WHERE id = $1 AND is_active = true', [req.userId]);
+    const user = await dbGet(
+      'SELECT * FROM users WHERE id = $1 AND is_active IS NOT FALSE',
+      [req.userId]
+    );
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     return res.json({ success: true, user: sanitizeUser(user) });
   } catch (error) {
@@ -186,6 +199,7 @@ router.put('/role', requireAuth, [
 });
 
 // ── Auth Middleware ───────────────────────────────────────────────────────────
+// Exported so driver.js and operator.js can use it for their /register routes
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
@@ -203,3 +217,4 @@ function requireAuth(req, res, next) {
 }
 
 module.exports = router;
+module.exports.requireAuth = requireAuth; // ← exported for driver.js & operator.js

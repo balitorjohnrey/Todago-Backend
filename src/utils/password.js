@@ -1,6 +1,6 @@
 /**
  * TodaGo Password Security — Pepper + Salt + bcrypt
- * Used for ALL user types: commuters, drivers, operators
+ * Used for ALL user types: passengers, drivers, operators
  */
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');

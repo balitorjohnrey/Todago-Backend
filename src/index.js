@@ -11,6 +11,7 @@ const authRoutes         = require('./routes/auth');
 const driverAuthRoutes   = require('./routes/driver_auth');
 const operatorAuthRoutes = require('./routes/operator_auth');
 const subscriptionRoutes = require('./routes/subscription');
+const tripRoutes          = require('./routes/trips');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -57,6 +58,7 @@ app.use('/api/auth',          authRoutes);
 app.use('/api/driver',        driverAuthRoutes);
 app.use('/api/operator',      operatorAuthRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/trips',         tripRoutes);
 
 // ── 404 ──────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -71,6 +73,8 @@ app.use((req, res) => {
       'POST /api/operator/register',
       'POST /api/operator/login',
       'GET  /api/subscriptions/plans',
+      'GET  /api/trips/drivers/online',
+      'POST /api/trips/request',
     ],
   });
 });

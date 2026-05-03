@@ -108,18 +108,21 @@ router.post('/register',
       const driverId = uuidv4();
 
       // Insert driver — personal info and password come from the main users record
+      // toda_id is NULL here — the free-text branch name is stored in toda_branch_name
+      // toda_id FK link happens later when an operator claims/verifies the driver
       await dbRun(
         `INSERT INTO drivers
-          (driver_id, user_id, toda_id, driver_name, email, phone,
+          (driver_id, user_id, toda_id, toda_branch_name, driver_name, email, phone,
            license_no, toda_body_number, password_hash, salt, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'offline')`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'offline')`,
         [
           driverId,
-          mainUser.id,          // ← linked to main account
-          todaId || null,
-          mainUser.full_name,   // ← auto-filled from main account
-          mainUser.email,       // ← auto-filled from main account
-          mainUser.phone,       // ← auto-filled from main account (no mismatch!)
+          mainUser.id,           // ← linked to main account
+          null,                  // ← toda_id NULL (no FK violation)
+          todaId || null,        // ← free-text branch name stored here instead
+          mainUser.full_name,    // ← auto-filled from main account
+          mainUser.email,        // ← auto-filled from main account
+          mainUser.phone,        // ← auto-filled from main account (no mismatch!)
           licenseNo.trim(),
           todaBodyNumber.trim(),
           mainUser.password_hash, // ← shared password hash

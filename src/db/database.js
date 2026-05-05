@@ -24,7 +24,30 @@ async function initializeDatabase() {
   try {
     await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
 
-    // ── COMMUTERS ─────────────────────────────────────────────────────────────
+    // ── USERS (main auth table — replaces commuters for auth) ────────────────
+    // This is the single source of truth for all registered accounts.
+    // Drivers and operators link back here via user_id.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        full_name     TEXT NOT NULL,
+        email         TEXT UNIQUE NOT NULL,
+        phone         TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        salt          TEXT NOT NULL DEFAULT 'legacy',
+        is_verified   BOOLEAN DEFAULT false,
+        is_active     BOOLEAN DEFAULT true,
+        role          TEXT DEFAULT 'passenger',
+        created_at    TIMESTAMPTZ DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ DEFAULT NOW(),
+        last_login    TIMESTAMPTZ
+      )
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`
+    );
+
+    // ── COMMUTERS (legacy — kept so existing FK refs don't break on old DBs) ─
     await client.query(`
       CREATE TABLE IF NOT EXISTS commuters (
         commuter_id   TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -83,6 +106,10 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE operators ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`
     );
+    // Link operator back to main users account
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`
+    );
 
     // ── DRIVERS ───────────────────────────────────────────────────────────────
     await client.query(`
@@ -110,6 +137,14 @@ async function initializeDatabase() {
     `);
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`
+    );
+    // Link driver back to main users account
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`
+    );
+    // Store free-text TODA branch name (toda_id FK is set later by operator verification)
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS toda_branch_name TEXT`
     );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────
@@ -141,7 +176,6 @@ async function initializeDatabase() {
       )
     `);
 
-    // Seed default plans — safe to run multiple times (UNIQUE on plan_name)
     const plans = [
       ['Driver Basic',   'driver',    0.00, 30,
        '{Accept rides,GPS tracking,Earnings dashboard}'],
@@ -238,10 +272,11 @@ async function initializeDatabase() {
     );
 
     // ── TRIPS ─────────────────────────────────────────────────────────────────
+    // commuter_id now references users(id) — NOT commuters(commuter_id)
     await client.query(`
       CREATE TABLE IF NOT EXISTS trips (
         trip_id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-        commuter_id       TEXT REFERENCES commuters(commuter_id) ON DELETE SET NULL,
+        commuter_id       TEXT,
         tricycle_id       TEXT REFERENCES tricycles(tricycle_id) ON DELETE SET NULL,
         driver_id         TEXT REFERENCES drivers(driver_id) ON DELETE SET NULL,
         route_segment     TEXT,
@@ -259,6 +294,15 @@ async function initializeDatabase() {
         end_timestamp     TIMESTAMPTZ,
         created_at        TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+
+    // ── FIX: Drop the old FK constraint on trips.commuter_id if it exists ────
+    // The old schema had commuter_id → commuters(commuter_id).
+    // Routes now store users.id in commuter_id, so we remove the FK constraint.
+    // commuter_id is intentionally left as a plain TEXT (no FK) so that
+    // users.id values can be stored without a commuters row being required.
+    await client.query(`
+      ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_commuter_id_fkey
     `);
 
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────
@@ -287,16 +331,22 @@ async function initializeDatabase() {
     `);
 
     // ── FEEDBACK ──────────────────────────────────────────────────────────────
+    // commuter_id references users(id) — FK to commuters is removed
     await client.query(`
       CREATE TABLE IF NOT EXISTS feedback (
         feedback_id  TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
         trip_id      TEXT REFERENCES trips(trip_id) ON DELETE CASCADE,
-        commuter_id  TEXT REFERENCES commuters(commuter_id) ON DELETE SET NULL,
+        commuter_id  TEXT,
         driver_id    TEXT REFERENCES drivers(driver_id) ON DELETE SET NULL,
         rating_score INT NOT NULL CHECK (rating_score BETWEEN 1 AND 5),
         comments     TEXT,
         created_at   TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+
+    // ── FIX: Drop the old FK constraint on feedback.commuter_id if it exists ─
+    await client.query(`
+      ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_commuter_id_fkey
     `);
 
     // ── PEAK HOUR LOGS ────────────────────────────────────────────────────────
@@ -312,10 +362,12 @@ async function initializeDatabase() {
     `);
 
     // ── LOGIN ATTEMPTS ────────────────────────────────────────────────────────
+    // user_type is nullable so that the commuter login (auth.js) can omit it
+    // without hitting a NOT NULL violation. Driver/operator routes pass it explicitly.
     await client.query(`
       CREATE TABLE IF NOT EXISTS login_attempts (
         id           SERIAL PRIMARY KEY,
-        user_type    TEXT NOT NULL CHECK (user_type IN ('commuter','driver','operator')),
+        user_type    TEXT CHECK (user_type IN ('commuter','driver','operator')),
         email        TEXT NOT NULL,
         ip_address   TEXT,
         success      BOOLEAN DEFAULT false,
@@ -338,6 +390,9 @@ async function initializeDatabase() {
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_trips_driver ON trips(driver_id)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_trips_commuter ON trips(commuter_id)`
     );
 
     console.log('[DB] All tables initialized successfully ✅');

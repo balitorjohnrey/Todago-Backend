@@ -18,7 +18,7 @@ const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet } = require('../db/database');
 const { verifyPassword } = require('../utils/password');
 
-// ── FIX: Import requireAuth from auth.js instead of duplicating it ────────────
+// ── FIX: requireAuth is now properly exported from auth.js ────────────────────
 const { requireAuth } = require('./auth');
 
 const router = express.Router();
@@ -108,8 +108,6 @@ router.post('/register',
       const driverId = uuidv4();
 
       // Insert driver — personal info and password come from the main users record
-      // toda_id is NULL here — the free-text branch name is stored in toda_branch_name
-      // toda_id FK link happens later when an operator claims/verifies the driver
       await dbRun(
         `INSERT INTO drivers
           (driver_id, user_id, toda_id, toda_branch_name, driver_name, email, phone,
@@ -117,16 +115,16 @@ router.post('/register',
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'offline')`,
         [
           driverId,
-          mainUser.id,           // ← linked to main account
-          null,                  // ← toda_id NULL (no FK violation)
-          todaId || null,        // ← free-text branch name stored here instead
-          mainUser.full_name,    // ← auto-filled from main account
-          mainUser.email,        // ← auto-filled from main account
-          mainUser.phone,        // ← auto-filled from main account (no mismatch!)
+          mainUser.id,
+          null,
+          todaId || null,
+          mainUser.full_name,
+          mainUser.email,
+          mainUser.phone,
           licenseNo.trim(),
           todaBodyNumber.trim(),
-          mainUser.password_hash, // ← shared password hash
-          mainUser.salt,          // ← shared salt
+          mainUser.password_hash,
+          mainUser.salt,
         ]
       );
 
@@ -188,11 +186,9 @@ router.post('/login', [
   const { todaBodyNumber, plateNo, password } = req.body;
   const ip = clientIp(req);
 
-  // Normalize plate for comparison (strip spaces, lowercase)
   const normalizedPlate = plateNo.trim().toLowerCase().replace(/\s/g, '');
 
   try {
-    // Find driver by TODA body number
     const driver = await dbGet(
       `SELECT d.*, t.plate_no AS tricycle_plate
        FROM drivers d
@@ -202,12 +198,10 @@ router.post('/login', [
       [todaBodyNumber.trim()]
     );
 
-    // Validate plate matches (normalized comparison)
     const plateMatch = driver
       ? (driver.tricycle_plate || '').toLowerCase().replace(/\s/g, '') === normalizedPlate
       : false;
 
-    // Always run bcrypt to prevent timing attacks
     const dummyHash = '$2b$12$dummyhashfortimingattackXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
     const dummySalt = 'a1b2c3d4e5f6a7b8c9d0e1f2';
 

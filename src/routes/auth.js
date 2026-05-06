@@ -202,4 +202,6 @@ function requireAuth(req, res, next) {
   }
 }
 
+// ── FIX: Export both the router AND requireAuth so other route files can import it ──
 module.exports = router;
+module.exports.requireAuth = requireAuth;

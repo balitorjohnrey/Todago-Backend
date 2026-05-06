@@ -18,7 +18,7 @@ const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { verifyPassword } = require('../utils/password');
 
-// ── FIX: Import requireAuth from auth.js instead of duplicating it ────────────
+// ── FIX: requireAuth is now properly exported from auth.js ────────────────────
 const { requireAuth } = require('./auth');
 
 const router = express.Router();
@@ -136,13 +136,13 @@ router.post('/register',
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
           operatorId,
-          mainUser.id,            // ← linked to main account
+          mainUser.id,
           todaId,
-          mainUser.full_name,     // ← auto-filled from main account
-          mainUser.email,         // ← auto-filled from main account
-          mainUser.phone,         // ← auto-filled from main account
-          mainUser.password_hash, // ← shared password hash
-          mainUser.salt,          // ← shared salt
+          mainUser.full_name,
+          mainUser.email,
+          mainUser.phone,
+          mainUser.password_hash,
+          mainUser.salt,
           associationCode.trim(),
         ]
       );
@@ -192,7 +192,6 @@ router.post('/login', [
   const ip = clientIp(req);
 
   try {
-    // Find operator by email + validate TODA association ID
     const operator = await dbGet(
       `SELECT o.*, ta.association_name, ta.association_code,
               ta.ltfrb_number, ta.is_verified AS toda_verified
@@ -208,7 +207,6 @@ router.post('/login', [
       [email.toLowerCase(), todaAssociationId.trim()]
     );
 
-    // Always run bcrypt to prevent timing attacks
     const dummyHash = '$2b$12$dummyhashfortimingattackXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
     const dummySalt = 'a1b2c3d4e5f6a7b8c9d0e1f2';
 

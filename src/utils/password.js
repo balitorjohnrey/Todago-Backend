@@ -2,7 +2,7 @@
  * TodaGo Password Security — Pepper + Salt + bcrypt
  * Used for ALL user types: passengers, drivers, operators
  */
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
 const PEPPER = process.env.PASSWORD_PEPPER;

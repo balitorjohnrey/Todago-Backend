@@ -4,7 +4,6 @@
   "description": "TodaGo Premium Tricycle Hailing - Backend API",
   "main": "src/index.js",
   "scripts": {
-    "build": "npm rebuild bcrypt --build-from-source",
     "start": "node src/index.js",
     "dev": "nodemon src/index.js"
   },

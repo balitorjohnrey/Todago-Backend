@@ -24,9 +24,7 @@ async function initializeDatabase() {
   try {
     await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
 
-    // ── USERS (main auth table — replaces commuters for auth) ────────────────
-    // This is the single source of truth for all registered accounts.
-    // Drivers and operators link back here via user_id.
+    // ── USERS (main account — used by auth.js) ────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -35,19 +33,23 @@ async function initializeDatabase() {
         phone         TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         salt          TEXT NOT NULL DEFAULT 'legacy',
+        role          TEXT DEFAULT 'passenger',
         is_verified   BOOLEAN DEFAULT false,
         is_active     BOOLEAN DEFAULT true,
-        role          TEXT DEFAULT 'passenger',
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
       )
     `);
+    // Ensure is_active defaults to true for any NULL rows
     await client.query(
-      `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`
+      `UPDATE users SET is_active = true WHERE is_active IS NULL`
+    );
+    await client.query(
+      `ALTER TABLE users ALTER COLUMN is_active SET DEFAULT true`
     );
 
-    // ── COMMUTERS (legacy — kept so existing FK refs don't break on old DBs) ─
+    // ── COMMUTERS (kept for backward compat — legacy table) ───────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS commuters (
         commuter_id   TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -106,9 +108,9 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE operators ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`
     );
-    // Link operator back to main users account
+    // Link operators back to users table
     await client.query(
-      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id)`
     );
 
     // ── DRIVERS ───────────────────────────────────────────────────────────────
@@ -138,11 +140,11 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`
     );
-    // Link driver back to main users account
+    // Link drivers back to users table
     await client.query(
-      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id)`
     );
-    // Store free-text TODA branch name (toda_id FK is set later by operator verification)
+    // Store free-text TODA branch name (no FK constraint)
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS toda_branch_name TEXT`
     );
@@ -161,6 +163,13 @@ async function initializeDatabase() {
         created_at    TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    // Drop toda_id FK on tricycles to allow null toda_id
+    await client.query(
+      `ALTER TABLE tricycles DROP CONSTRAINT IF EXISTS tricycles_toda_id_fkey`
+    );
+    await client.query(
+      `ALTER TABLE tricycles ALTER COLUMN toda_id DROP NOT NULL`
+    );
 
     // ── SUBSCRIPTION PLANS ────────────────────────────────────────────────────
     await client.query(`
@@ -272,7 +281,7 @@ async function initializeDatabase() {
     );
 
     // ── TRIPS ─────────────────────────────────────────────────────────────────
-    // commuter_id now references users(id) — NOT commuters(commuter_id)
+    // commuter_id references users.id (not commuters)
     await client.query(`
       CREATE TABLE IF NOT EXISTS trips (
         trip_id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -287,6 +296,8 @@ async function initializeDatabase() {
         fare              NUMERIC(10,2) DEFAULT 0,
         payment_method    TEXT DEFAULT 'cash'
                             CHECK (payment_method IN ('cash','gcash','maya','wallet')),
+        wait_time_seconds INT DEFAULT 0,
+        avg_speed_kmh     FLOAT DEFAULT 0,
         status            TEXT DEFAULT 'requested'
                             CHECK (status IN ('requested','accepted','pickup','ongoing','completed','cancelled')),
         request_timestamp TIMESTAMPTZ DEFAULT NOW(),
@@ -295,15 +306,31 @@ async function initializeDatabase() {
         created_at        TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-
-    // ── FIX: Drop the old FK constraint on trips.commuter_id if it exists ────
-    // The old schema had commuter_id → commuters(commuter_id).
-    // Routes now store users.id in commuter_id, so we remove the FK constraint.
-    // commuter_id is intentionally left as a plain TEXT (no FK) so that
-    // users.id values can be stored without a commuters row being required.
+    // Drop old FK pointing to commuters, add new one pointing to users
+    await client.query(
+      `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_commuter_id_fkey`
+    );
     await client.query(`
-      ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_commuter_id_fkey
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'trips_commuter_id_fkey'
+            AND conrelid = 'trips'::regclass
+        ) THEN
+          ALTER TABLE trips
+            ADD CONSTRAINT trips_commuter_id_fkey
+            FOREIGN KEY (commuter_id) REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
     `);
+    // Add missing columns if upgrading from old schema
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS wait_time_seconds INT DEFAULT 0`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS avg_speed_kmh FLOAT DEFAULT 0`
+    );
 
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────
     await client.query(`
@@ -331,7 +358,6 @@ async function initializeDatabase() {
     `);
 
     // ── FEEDBACK ──────────────────────────────────────────────────────────────
-    // commuter_id references users(id) — FK to commuters is removed
     await client.query(`
       CREATE TABLE IF NOT EXISTS feedback (
         feedback_id  TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -342,11 +368,6 @@ async function initializeDatabase() {
         comments     TEXT,
         created_at   TIMESTAMPTZ DEFAULT NOW()
       )
-    `);
-
-    // ── FIX: Drop the old FK constraint on feedback.commuter_id if it exists ─
-    await client.query(`
-      ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_commuter_id_fkey
     `);
 
     // ── PEAK HOUR LOGS ────────────────────────────────────────────────────────
@@ -362,20 +383,35 @@ async function initializeDatabase() {
     `);
 
     // ── LOGIN ATTEMPTS ────────────────────────────────────────────────────────
-    // user_type is nullable so that the commuter login (auth.js) can omit it
-    // without hitting a NOT NULL violation. Driver/operator routes pass it explicitly.
     await client.query(`
       CREATE TABLE IF NOT EXISTS login_attempts (
         id           SERIAL PRIMARY KEY,
-        user_type    TEXT CHECK (user_type IN ('commuter','driver','operator')),
+        user_type    TEXT DEFAULT 'passenger',
         email        TEXT NOT NULL,
         ip_address   TEXT,
         success      BOOLEAN DEFAULT false,
         attempted_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await client.query(
+      `ALTER TABLE login_attempts ADD COLUMN IF NOT EXISTS user_type TEXT DEFAULT 'passenger'`
+    );
+
+    // ── REFRESH TOKENS ────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id         SERIAL PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        token      TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
 
     // ── INDEXES ───────────────────────────────────────────────────────────────
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`
+    );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_commuters_email ON commuters(email)`
     );

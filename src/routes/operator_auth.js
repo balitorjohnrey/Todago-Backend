@@ -10,6 +10,10 @@
  *
  * - Login uses the same password as the main account (password_hash + salt
  *   copied from users at registration time).
+ *
+ * - LOGIN FIX: The WHERE clause now also matches against association_name
+ *   (case-insensitive), so users can enter either the short association code
+ *   OR the full association name (e.g. "Panabo City TODA") in the login field.
  */
 const express = require('express');
 const { body, validationResult } = require('express-validator');
@@ -175,7 +179,12 @@ router.post('/register',
 );
 
 // ── POST /api/operator/login ──────────────────────────────────────────────────
-// Login: TODA Association ID (code) + email + main account password
+// Login: TODA Association ID (full name OR code) + email + main account password
+//
+// FIX: The WHERE clause now matches on association_name OR association_code
+// (both case-insensitive), so users can type either value in the login field.
+// Previously only association_code was matched, causing "Invalid credentials"
+// when the user typed the full association name (e.g. "Panabo City TODA").
 router.post('/login', [
   body('todaAssociationId').trim().notEmpty()
     .withMessage('TODA Association ID is required'),
@@ -192,6 +201,9 @@ router.post('/login', [
   const ip = clientIp(req);
 
   try {
+    // ── FIX: Match by association_code OR association_name (both case-insensitive)
+    // Previously only association_code was checked, so entering the full name
+    // like "Panabo City TODA" always returned 401 even with correct credentials.
     const operator = await dbGet(
       `SELECT o.*, ta.association_name, ta.association_code,
               ta.ltfrb_number, ta.is_verified AS toda_verified
@@ -203,6 +215,7 @@ router.post('/login', [
            ta.association_code = $2
            OR ta.toda_id::text = $2
            OR LOWER(ta.association_code) = LOWER($2)
+           OR LOWER(ta.association_name) = LOWER($2)
          )`,
       [email.toLowerCase(), todaAssociationId.trim()]
     );

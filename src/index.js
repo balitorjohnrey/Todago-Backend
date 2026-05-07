@@ -18,9 +18,9 @@ const driverAuthRouter   = require('./routes/driver_auth');
 const operatorAuthRouter = require('./routes/operator_auth');
 const tripsRouter        = require('./routes/trips');
 const subscriptionsRouter = require('./routes/subscriptions');
-const migrateRouter = require('./routes/migrate');
-app.use('/api/migrate', migrateRouter);
+const migrateRouter = require('./db/migrate');
 
+app.use('/api/migrate',       migrateRouter);
 app.use('/api/auth',          authRouter);
 app.use('/api/driver',        driverAuthRouter);
 app.use('/api/operator',      operatorAuthRouter);

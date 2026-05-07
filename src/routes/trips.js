@@ -154,6 +154,7 @@ router.post('/request', requireAuth, [
       message: 'Ride requested successfully!',
       trip: {
         ...trip,
+        fare:             parseFloat(trip.fare),   // always send as number
         driver_name:      driver.driver_name,
         plate_no:         driver.plate_no,
         toda_body_number: driver.toda_body_number,

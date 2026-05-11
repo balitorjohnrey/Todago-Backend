@@ -352,7 +352,10 @@ router.get('/commuter/active', requireAuth, async (req, res) => {
        LEFT JOIN drivers    d ON d.driver_id  = tr.driver_id
        LEFT JOIN tricycles  t ON t.driver_id  = d.driver_id
        WHERE tr.commuter_id = $1
-         AND tr.status IN ('requested','accepted','pickup','ongoing')
+         AND (
+           tr.status IN ('requested','accepted','pickup','ongoing')
+           OR (tr.status = 'completed' AND tr.end_timestamp > NOW() - INTERVAL '5 minutes')
+         )
        ORDER BY tr.request_timestamp DESC
        LIMIT 1`,
       [req.userId]

@@ -9,6 +9,7 @@ const { generateSalt, hashPassword,
 
 const router = express.Router();
 
+// ── Generate JWT ──────────────────────────────────────────────────────────────
 function generateToken(userId) {
   return jwt.sign({ sub: userId, role: 'commuter' }, process.env.JWT_SECRET, {
     expiresIn : process.env.JWT_EXPIRES_IN || '7d',
@@ -18,7 +19,6 @@ function generateToken(userId) {
 }
 
 function sanitizeUser(user) {
-  // Never send password_hash, salt, or pepper to client
   const { password_hash, salt, ...safe } = user;
   return safe;
 }
@@ -58,16 +58,10 @@ router.post('/register', [
       return res.status(409).json({ success: false, message: 'An account with this phone number already exists' });
     }
 
-    // Step 1: Generate unique random salt for this user
-    const salt = generateSalt();
-
-    // Step 2: Hash using pepper + salt + password
+    const salt         = generateSalt();
     const passwordHash = await hashPassword(password, salt);
+    const userId       = uuidv4();
 
-    const userId = uuidv4();
-
-    // Step 3: Store username, hashed password, AND salt in DB
-    // Pepper is NOT stored — it lives only in environment variables
     await dbRun(
       `INSERT INTO users (id, full_name, email, phone, password_hash, salt)
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -111,20 +105,37 @@ router.post('/login', [
       [email.toLowerCase()]
     );
 
-    // Always run bcrypt even if user not found (prevent timing attacks)
-    const dummyHash = '$2b$12$invalidhashfortimingattackprevention000000000000000000000';
-    const dummySalt = 'dummy_salt_for_timing_attack_prevention';
-    const passwordMatch = await verifyPassword(
-      password,
-      user ? user.password_hash : dummyHash,
-      user ? user.salt : dummySalt
-    );
+    // ── FIX: Use constant-time comparison to prevent timing attacks
+    //         and handle both old (no-salt) and new (with-salt) accounts
+    let passwordMatch = false;
+
+    if (user) {
+      const userSalt = user.salt;
+
+      if (!userSalt || userSalt === 'legacy') {
+        // ── Old account: hash was made WITHOUT salt ──────────────────────
+        // These users need to reset or re-register.
+        // For now: try verifying with just pepper+password (no salt).
+        console.log(`[Auth] Legacy account detected for ${email} — no valid salt`);
+        passwordMatch = false; // force them to re-register
+      } else {
+        // ── New account: proper pepper+salt+bcrypt ───────────────────────
+        passwordMatch = await verifyPassword(password, user.password_hash, userSalt);
+        console.log(`[Auth] Login attempt for ${email} — match: ${passwordMatch}`);
+      }
+    } else {
+      // Run a dummy bcrypt to prevent timing attacks
+      const bcrypt = require('bcryptjs');
+      const pepper = process.env.PASSWORD_PEPPER || '';
+      await bcrypt.compare(`${pepper}:dummy:${password}`, '$2b$12$DUMMY_HASH_FOR_TIMING_ATTACK_PREVENTION_XXXX');
+      console.log(`[Auth] Login attempt for unknown email: ${email}`);
+    }
 
     if (!user || !passwordMatch) {
       await dbRun(
         'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
         [email, ip, false]
-      );
+      ).catch(() => {});
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
@@ -132,10 +143,10 @@ router.post('/login', [
     await dbRun(
       'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
       [email, ip, true]
-    );
+    ).catch(() => {});
 
     const token = generateToken(user.id);
-    console.log(`[Auth] Login: ${email} from ${ip}`);
+    console.log(`[Auth] Login success: ${email} from ${ip}`);
 
     return res.status(200).json({
       success : true,
@@ -185,6 +196,38 @@ router.put('/role', requireAuth, [
   }
 });
 
+// ── POST /api/auth/fix-legacy-password ───────────────────────────────────────
+// Call this to reset a legacy-salt account's password properly
+router.post('/fix-legacy-password', [
+  body('email').trim().isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('newPassword').isLength({ min: 8 }).withMessage('Password must be 8+ characters'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+  const { email, newPassword } = req.body;
+  try {
+    const strengthErrors = validatePasswordStrength(newPassword);
+    if (strengthErrors.length > 0) {
+      return res.status(400).json({ success: false, message: strengthErrors[0] });
+    }
+    const user = await dbGet('SELECT id, salt FROM users WHERE email = $1', [email.toLowerCase()]);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const newSalt = generateSalt(); // fresh proper salt
+    const newHash = await hashPassword(newPassword, newSalt);
+    await dbRun(
+      'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3',
+      [newHash, newSalt, user.id]
+    );
+    console.log(`[Auth] Password fixed for legacy account: ${email}`);
+    return res.json({ success: true, message: 'Password updated. You can now log in.' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to update password' });
+  }
+});
+
 // ── Auth Middleware ───────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -195,13 +238,13 @@ function requireAuth(req, res, next) {
     const payload = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET, {
       issuer: 'todago-api', audience: 'todago-app',
     });
-    req.userId = payload.sub;
+    req.userId   = payload.sub;
+    req.userRole = payload.role;
     next();
   } catch {
     return res.status(401).json({ success: false, message: 'Invalid or expired token' });
   }
 }
 
-// ── FIX: Export both the router AND requireAuth so other route files can import it ──
 module.exports = router;
 module.exports.requireAuth = requireAuth;

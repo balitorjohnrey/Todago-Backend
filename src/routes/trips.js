@@ -20,7 +20,7 @@ function requireAuth(req, res, next) {
       issuer: 'todago-api', audience: 'todago-app',
     });
     req.userId   = payload.sub;
-    req.userRole = payload.role; // 'commuter' | 'driver' | 'operator'
+    req.userRole = payload.role;
     next();
   } catch {
     return res.status(401).json({ success: false, message: 'Invalid or expired token' });
@@ -75,7 +75,6 @@ router.post('/request', requireAuth, [
     return res.status(422).json({ success: false, message: errors.array()[0].msg });
   }
 
-  // Only passengers / commuters can request rides
   if (req.userRole === 'driver' || req.userRole === 'operator') {
     return res.status(403).json({
       success: false,
@@ -85,7 +84,6 @@ router.post('/request', requireAuth, [
 
   const { driverId, pickupLocation, destination, fare, paymentMethod } = req.body;
 
-  // Normalize serviceType
   let serviceType = (req.body.serviceType || 'solo')
     .toLowerCase().replace(/[-\s]/g, '');
   if (serviceType.includes('express')) serviceType = 'express';
@@ -93,7 +91,6 @@ router.post('/request', requireAuth, [
   else serviceType = 'solo';
 
   try {
-    // Verify driver is still online — get driver + tricycle info
     const driver = await dbGet(
       `SELECT d.driver_id, d.status, d.toda_body_number, d.driver_name,
               t.plate_no, t.tricycle_id
@@ -113,7 +110,6 @@ router.post('/request', requireAuth, [
       });
     }
 
-    // Get passenger info from USERS table (auth.js stores passengers here)
     const passenger = await dbGet(
       `SELECT id, full_name, phone FROM users WHERE id = $1 AND is_active = true`,
       [req.userId]
@@ -123,7 +119,6 @@ router.post('/request', requireAuth, [
       return res.status(404).json({ success: false, message: 'Passenger account not found' });
     }
 
-    // Create trip — use passenger's users.id as commuter_id
     const tripId = uuidv4();
     await dbRun(
       `INSERT INTO trips
@@ -136,7 +131,6 @@ router.post('/request', requireAuth, [
        parseFloat(fare), paymentMethod]
     );
 
-    // Mark driver as on_trip
     await dbRun(
       `UPDATE drivers SET status = 'on_trip', updated_at = NOW()
        WHERE driver_id = $1`,
@@ -154,7 +148,7 @@ router.post('/request', requireAuth, [
       message: 'Ride requested successfully!',
       trip: {
         ...trip,
-        fare:             parseFloat(trip.fare),   // always send as number
+        fare:             parseFloat(trip.fare),
         driver_name:      driver.driver_name,
         plate_no:         driver.plate_no,
         toda_body_number: driver.toda_body_number,
@@ -173,7 +167,6 @@ router.get('/driver/pending', requireAuth, async (req, res) => {
     return res.status(403).json({ success: false, message: 'Driver access only' });
   }
   try {
-    // Join with users table to get real passenger name
     const trip = await dbGet(
       `SELECT tr.*,
               COALESCE(u.full_name, 'Passenger') AS commuter_name,
@@ -236,7 +229,6 @@ router.put('/:tripId/decline', requireAuth, async (req, res) => {
        WHERE trip_id = $1 AND driver_id = $2`,
       [req.params.tripId, req.userId]
     );
-    // Set driver back to online
     await dbRun(
       `UPDATE drivers SET status = 'online', updated_at = NOW()
        WHERE driver_id = $1`,
@@ -270,7 +262,6 @@ router.put('/:tripId/status', requireAuth, [
       [status, req.params.tripId]
     );
 
-    // On completion — calculate commission, update driver stats
     if (status === 'completed') {
       const trip = await dbGet(
         `SELECT * FROM trips WHERE trip_id = $1`, [req.params.tripId]
@@ -278,11 +269,10 @@ router.put('/:tripId/status', requireAuth, [
 
       if (trip && req.userRole === 'driver') {
         const grossFare    = parseFloat(trip.fare);
-        const commPct      = 0;    // Flat fee — not percentage
-        const commAmt      = 5.0;  // Flat ₱5 per ride
+        const commPct      = 0;
+        const commAmt      = 5.0;
         const driverPayout = +(grossFare - commAmt).toFixed(2);
 
-        // Record commission
         await dbRun(
           `INSERT INTO commission_ledger
             (ledger_id, trip_id, driver_id, toda_id,
@@ -294,7 +284,6 @@ router.put('/:tripId/status', requireAuth, [
            grossFare, commPct, commAmt, driverPayout]
         );
 
-        // Driver goes back online + increment trips
         await dbRun(
           `UPDATE drivers
            SET total_trips = total_trips + 1,
@@ -310,7 +299,7 @@ router.put('/:tripId/status', requireAuth, [
           success: true,
           message: 'Trip completed!',
           earnings: {
-            gross_fare:    grossFare,
+            gross_fare:     grossFare,
             commission_pct: commPct,
             commission_amt: commAmt,
             your_earnings:  driverPayout,
@@ -320,7 +309,6 @@ router.put('/:tripId/status', requireAuth, [
     }
 
     if (status === 'cancelled') {
-      // Driver goes back online
       if (req.userRole === 'driver') {
         await dbRun(
           `UPDATE drivers SET status = 'online', updated_at = NOW()
@@ -340,7 +328,6 @@ router.put('/:tripId/status', requireAuth, [
 // ── GET /api/trips/commuter/active ────────────────────────────────────────────
 router.get('/commuter/active', requireAuth, async (req, res) => {
   try {
-    // Search by commuter_id matching users.id (the passenger's JWT sub)
     const trip = await dbGet(
       `SELECT tr.*,
               d.driver_name,
@@ -396,10 +383,13 @@ router.get('/driver/active', requireAuth, async (req, res) => {
 router.get('/commuter/history', requireAuth, async (req, res) => {
   try {
     const trips = await dbAll(
-      `SELECT tr.*, d.driver_name, d.toda_body_number, t.plate_no
+      `SELECT tr.*, d.driver_name, d.toda_body_number, t.plate_no,
+              f.rating_score, f.comments AS rating_comment
        FROM trips tr
        LEFT JOIN drivers   d ON d.driver_id = tr.driver_id
        LEFT JOIN tricycles t ON t.driver_id = d.driver_id
+       LEFT JOIN feedback  f ON f.trip_id   = tr.trip_id
+                             AND f.commuter_id = tr.commuter_id
        WHERE tr.commuter_id = $1
        ORDER BY tr.request_timestamp DESC
        LIMIT 50`,
@@ -422,16 +412,161 @@ router.get('/driver/history', requireAuth, async (req, res) => {
               COALESCE(u.full_name, 'Passenger') AS commuter_name,
               cl.commission_amt,
               cl.driver_payout,
-              cl.commission_pct
+              cl.commission_pct,
+              f.rating_score,
+              f.comments AS rating_comment
        FROM trips tr
        LEFT JOIN users             u  ON u.id        = tr.commuter_id
        LEFT JOIN commission_ledger cl ON cl.trip_id  = tr.trip_id
+       LEFT JOIN feedback          f  ON f.trip_id   = tr.trip_id
        WHERE tr.driver_id = $1
        ORDER BY tr.request_timestamp DESC
        LIMIT 50`,
       [req.userId]
     );
     return res.json({ success: true, trips });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ── POST /api/trips/:tripId/rate ──────────────────────────────────────────────
+// Passenger submits a 1–5 star rating + optional comment after a completed trip.
+// Permanently updates the driver's avg_rating in the drivers table.
+router.post('/:tripId/rate', requireAuth, [
+  body('rating')
+    .isInt({ min: 1, max: 5 })
+    .withMessage('Rating must be between 1 and 5'),
+  body('comment')
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Comment must be 500 characters or less'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  const { rating, comment } = req.body;
+  const { tripId } = req.params;
+
+  if (req.userRole === 'driver' || req.userRole === 'operator') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only passengers can submit ratings',
+    });
+  }
+
+  try {
+    // 1. Verify the trip belongs to this passenger and is completed
+    const trip = await dbGet(
+      `SELECT trip_id, driver_id, commuter_id
+       FROM trips
+       WHERE trip_id    = $1
+         AND commuter_id = $2
+         AND status     = 'completed'`,
+      [tripId, req.userId]
+    );
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found, not yours, or not yet completed',
+      });
+    }
+
+    // 2. Prevent duplicate ratings for the same trip
+    const existing = await dbGet(
+      `SELECT feedback_id FROM feedback WHERE trip_id = $1`,
+      [tripId]
+    );
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'You have already rated this trip',
+      });
+    }
+
+    // 3. Insert into the feedback table
+    const feedbackId = uuidv4();
+    await dbRun(
+      `INSERT INTO feedback
+         (feedback_id, trip_id, commuter_id, driver_id, rating_score, comments)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        feedbackId,
+        tripId,
+        req.userId,
+        trip.driver_id,
+        parseInt(rating, 10),
+        comment ? comment.trim() : null,
+      ]
+    );
+
+    // 4. Permanently recalculate and update driver's avg_rating
+    await dbRun(
+      `UPDATE drivers
+       SET avg_rating = (
+         SELECT ROUND(AVG(rating_score)::numeric, 2)
+         FROM feedback
+         WHERE driver_id = $1
+       ),
+       updated_at = NOW()
+       WHERE driver_id = $1`,
+      [trip.driver_id]
+    );
+
+    // 5. Update today's performance report if it exists
+    await dbRun(
+      `INSERT INTO performance_reports (report_id, driver_id, report_date, avg_rating, total_trips)
+       VALUES ($1, $2, CURRENT_DATE, 0, 0)
+       ON CONFLICT DO NOTHING`,
+      [uuidv4(), trip.driver_id]
+    ).catch(() => {});
+
+    await dbRun(
+      `UPDATE performance_reports
+       SET avg_rating = (
+         SELECT ROUND(AVG(rating_score)::numeric, 2)
+         FROM feedback WHERE driver_id = $1
+       )
+       WHERE driver_id = $1 AND report_date = CURRENT_DATE`,
+      [trip.driver_id]
+    ).catch(() => {});
+
+    console.log(
+      `[Trips] Rating submitted: trip=${tripId}, driver=${trip.driver_id}, score=${rating}`
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Thank you for your feedback!',
+      feedback_id: feedbackId,
+    });
+  } catch (err) {
+    console.error('[Trips] Rating error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to submit rating' });
+  }
+});
+
+// ── GET /api/trips/:tripId/rating ─────────────────────────────────────────────
+// Check whether the passenger has already rated a specific trip.
+router.get('/:tripId/rating', requireAuth, async (req, res) => {
+  try {
+    const feedback = await dbGet(
+      `SELECT feedback_id, rating_score, comments, created_at
+       FROM feedback
+       WHERE trip_id     = $1
+         AND commuter_id = $2`,
+      [req.params.tripId, req.userId]
+    );
+    return res.json({
+      success:  true,
+      hasRated: !!feedback,
+      feedback: feedback || null,
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Server error' });
   }

@@ -18,6 +18,7 @@ const driverAuthRouter   = require('./routes/driver_auth');
 const operatorAuthRouter = require('./routes/operator_auth');
 const tripsRouter        = require('./routes/trips');
 const subscriptionsRouter = require('./routes/subscriptions');
+const aiRouter = require('./routes/ai');
 const migrateRouter = require('./db/migrate');
 
 app.use('/api/migrate',       migrateRouter);
@@ -26,6 +27,7 @@ app.use('/api/driver',        driverAuthRouter);
 app.use('/api/operator',      operatorAuthRouter);
 app.use('/api/trips',         tripsRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
+app.use('/api/ai',            aiRouter);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {

@@ -1,38 +1,29 @@
 /**
- * AI Chat Proxy — routes/ai.js
- *
- * Uses Google Gemini 1.5 Flash — completely FREE, no credit card needed.
- * Free tier: 1,500 requests/day · 15 requests/minute
- *
- * SETUP:
- * 1. Get free API key at https://aistudio.google.com/app/apikey
- * 2. Add to Railway environment variables:
- *       GEMINI_API_KEY = AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXX
+ * TodaGo Chatbot FAQ route.
  *
  * Endpoint: POST /api/ai/chat
  * Auth:     Bearer token (passenger or driver JWT)
+ *
+ * This route is intentionally FAQ-only. It does not call an external model.
  */
 
 const express = require('express');
-const jwt     = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 
-// ── Gemini model + base URL ───────────────────────────────────────────────────
-const GEMINI_MODEL = 'gemini-1.5-flash';
-const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
-// ── Auth middleware (supports both passenger and driver tokens) ───────────────
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) {
     return res.status(401).json({ success: false, message: 'Authorization required' });
   }
+
   try {
     const payload = jwt.verify(auth.split(' ')[1], process.env.JWT_SECRET, {
-      issuer: 'todago-api', audience: 'todago-app',
+      issuer: 'todago-api',
+      audience: 'todago-app',
     });
-    req.userId   = payload.sub;
+    req.userId = payload.sub;
     req.userRole = payload.role;
     next();
   } catch {
@@ -40,107 +31,164 @@ function requireAuth(req, res, next) {
   }
 }
 
-// ── Convert Anthropic-style messages → Gemini format ─────────────────────────
-// Anthropic: [{ role: 'user'|'assistant', content: 'text' }]
-// Gemini:    [{ role: 'user'|'model',     parts: [{ text: 'text' }] }]
-function toGeminiMessages(messages) {
-  return messages.map((m) => ({
-    role:  m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
+const FAQS = [
+  {
+    question: 'How do I book a ride?',
+    answer:
+      'Tap Book Now, choose your destination, confirm the route and fare, choose a service type, then select a driver. You can track the trip after the request is accepted.',
+    keywords: ['book', 'ride', 'request', 'destination', 'driver'],
+    roles: ['passenger'],
+  },
+  {
+    question: 'How do I cancel a trip?',
+    answer:
+      'Open the active trip or waiting screen and tap Cancel Trip. If a driver was already assigned, TodaGo notifies the driver and releases them for other rides.',
+    keywords: ['cancel', 'cancellation', 'trip', 'ride'],
+    roles: ['passenger'],
+  },
+  {
+    question: 'How do fares work?',
+    answer:
+      'TodaGo shows the estimated fare before confirmation. The fare is based on route distance, service type, and the minimum base fare. Cash is currently the default payment flow in the app.',
+    keywords: ['fare', 'price', 'pricing', 'cost', 'payment'],
+    roles: ['passenger', 'driver'],
+  },
+  {
+    question: 'How do I rate my driver?',
+    answer:
+      'After a completed trip, the rating screen appears. Choose 1 to 5 stars, select quick feedback tags, and submit. You can also rate completed trips from Past Trips if you skipped it.',
+    keywords: ['rate', 'rating', 'stars', 'feedback', 'review'],
+    roles: ['passenger'],
+  },
+  {
+    question: 'Where can I see my past trips?',
+    answer:
+      'Go to Bookings, then open the Past tab. Pull down to refresh if your latest completed or cancelled trip is not visible yet.',
+    keywords: ['past', 'history', 'bookings', 'completed', 'cancelled'],
+    roles: ['passenger'],
+  },
+  {
+    question: 'How do I upload a profile picture?',
+    answer:
+      'Open Profile and tap your avatar or Upload Photo. Choose an image from your gallery. The app saves it locally so your profile looks personal on this device.',
+    keywords: ['profile', 'picture', 'photo', 'avatar', 'upload'],
+    roles: ['passenger', 'driver'],
+  },
+  {
+    question: 'How do I go online as a driver?',
+    answer:
+      'On the driver dashboard, tap the large GO ONLINE button. When it turns green, you are available and TodaGo checks for incoming ride requests.',
+    keywords: ['online', 'offline', 'available', 'driver', 'go online'],
+    roles: ['driver'],
+  },
+  {
+    question: 'How do I accept a ride request?',
+    answer:
+      'When a ride request popup appears, review the pickup, destination, fare, and service type. Tap ACCEPT to take the ride or DECLINE if you cannot take it.',
+    keywords: ['accept', 'request', 'decline', 'popup', 'ride'],
+    roles: ['driver'],
+  },
+  {
+    question: 'How do driver earnings work?',
+    answer:
+      'Driver earnings are shown after completing a trip. The app subtracts the TodaGo commission from the passenger fare and shows your payout summary.',
+    keywords: ['earnings', 'income', 'payout', 'commission', 'fare'],
+    roles: ['driver'],
+  },
+  {
+    question: 'How do I complete a trip?',
+    answer:
+      'After pickup, follow the active trip screen. When the passenger reaches the destination, tap Complete Trip. The app then records the completed status and shows earnings.',
+    keywords: ['complete', 'finish', 'end', 'trip', 'destination'],
+    roles: ['driver'],
+  },
+  {
+    question: 'How can I improve my driver rating?',
+    answer:
+      'Arrive on time, confirm the passenger name, drive safely, keep the vehicle clean, and politely remind passengers they can rate the trip after completion.',
+    keywords: ['improve', 'rating', 'low', 'stars', 'feedback'],
+    roles: ['driver'],
+  },
+  {
+    question: 'What should I do if something goes wrong?',
+    answer:
+      'For app issues, check your internet connection, refresh the current screen, and try again. For trip safety or account problems, contact TodaGo support or your operator.',
+    keywords: ['problem', 'issue', 'error', 'support', 'help', 'wrong'],
+    roles: ['passenger', 'driver'],
+  },
+];
+
+function normalize(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-// ── POST /api/ai/chat ─────────────────────────────────────────────────────────
-router.post('/chat', requireAuth, async (req, res) => {
-  try {
-    const { messages, system, max_tokens } = req.body;
+function roleFaqs(role) {
+  const normalizedRole = role === 'driver' ? 'driver' : 'passenger';
+  return FAQS.filter((faq) => faq.roles.includes(normalizedRole));
+}
 
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'messages array is required and must not be empty',
-      });
-    }
+function extractMessage(body) {
+  if (typeof body?.message === 'string') return body.message;
+  if (typeof body?.prompt === 'string') return body.prompt;
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.error('[AI] GEMINI_API_KEY is not set in environment variables');
-      return res.status(500).json({
-        success: false,
-        message: 'AI service is not configured. Contact support.',
-      });
-    }
-
-    console.log(
-      `[AI] Gemini request from user=${req.userId} role=${req.userRole} msgs=${messages.length}`
-    );
-
-    // ── Build Gemini request body ─────────────────────────────────────────────
-    const geminiBody = {
-      // System instruction (replaces Anthropic's top-level "system" field)
-      system_instruction: system
-        ? { parts: [{ text: system }] }
-        : undefined,
-
-      // Conversation history in Gemini format
-      contents: toGeminiMessages(messages),
-
-      generationConfig: {
-        maxOutputTokens: max_tokens || 400,
-        temperature:     0.7,
-        topP:            0.9,
-      },
-
-      // Safety settings — keep relaxed so app support answers aren't blocked
-      safetySettings: [
-        { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_ONLY_HIGH' },
-        { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_ONLY_HIGH' },
-        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
-        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
-      ],
-    };
-
-    // ── Call Gemini API ───────────────────────────────────────────────────────
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(geminiBody),
-      signal:  AbortSignal.timeout(25000),
-    });
-
-    const data = await geminiRes.json();
-
-    if (!geminiRes.ok) {
-      const errMsg = data?.error?.message || 'Gemini API returned an error';
-      console.error('[AI] Gemini error:', geminiRes.status, errMsg);
-      return res.status(geminiRes.status).json({ success: false, message: errMsg });
-    }
-
-    // ── Extract text from Gemini response ─────────────────────────────────────
-    // Gemini format: { candidates: [{ content: { parts: [{ text: '...' }] } }] }
-    const text =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-      'I could not generate a response. Please try again.';
-
-    // ── Return in Anthropic-compatible format so Flutter needs no changes ─────
-    return res.json({
-      content: [{ type: 'text', text }],
-    });
-
-  } catch (err) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-      console.error('[AI] Gemini request timed out');
-      return res.status(504).json({
-        success: false,
-        message: 'AI response timed out. Please try again.',
-      });
-    }
-    console.error('[AI] Unexpected error:', err.message);
-    return res.status(500).json({
-      success: false,
-      message: 'AI service temporarily unavailable. Please try again.',
-    });
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg?.role === 'user' && typeof msg.content === 'string') return msg.content;
   }
+
+  return '';
+}
+
+function fallbackAnswer(faqs) {
+  const topics = faqs.slice(0, 4).map((faq) => faq.question).join(', ');
+  return `I can only answer TodaGo FAQs. Try asking about: ${topics}.`;
+}
+
+function answerFaq(message, role) {
+  const normalized = normalize(message);
+  const faqs = roleFaqs(role);
+
+  if (!normalized) return fallbackAnswer(faqs);
+
+  let best = null;
+  let bestScore = 0;
+
+  for (const faq of faqs) {
+    let score = 0;
+    const faqQuestion = normalize(faq.question);
+
+    if (faqQuestion === normalized) score += 8;
+    if (faqQuestion.includes(normalized) || normalized.includes(faqQuestion)) score += 4;
+
+    for (const keyword of faq.keywords) {
+      if (normalized.includes(normalize(keyword))) score += 2;
+    }
+
+    if (score > bestScore) {
+      best = faq;
+      bestScore = score;
+    }
+  }
+
+  return best && bestScore >= 2 ? best.answer : fallbackAnswer(faqs);
+}
+
+router.post('/chat', requireAuth, (req, res) => {
+  const message = extractMessage(req.body);
+  const role = req.userRole === 'driver' ? 'driver' : 'passenger';
+  const text = answerFaq(message, role);
+
+  return res.json({
+    success: true,
+    role,
+    content: [{ type: 'text', text }],
+    text,
+  });
 });
 
 module.exports = router;

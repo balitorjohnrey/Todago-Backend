@@ -254,6 +254,68 @@ router.put('/:tripId/status', requireAuth, [
   const { status } = req.body;
 
   try {
+    const trip = await dbGet(
+      `SELECT trip_id, commuter_id, driver_id, status, fare
+       FROM trips
+       WHERE trip_id = $1`,
+      [req.params.tripId]
+    );
+
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+
+    const isAssignedDriver =
+      req.userRole === 'driver' && trip.driver_id === req.userId;
+    const isTripPassenger =
+      ['commuter', 'passenger'].includes(req.userRole) &&
+      trip.commuter_id === req.userId;
+
+    if (status === 'cancelled') {
+      if (!isAssignedDriver && !isTripPassenger) {
+        return res.status(403).json({ success: false, message: 'Not allowed to cancel this trip' });
+      }
+      if (trip.status === 'completed') {
+        return res.status(409).json({ success: false, message: 'Completed trips cannot be cancelled' });
+      }
+
+      await dbRun(
+        `UPDATE trips
+         SET status = 'cancelled',
+             end_timestamp = COALESCE(end_timestamp, NOW())
+         WHERE trip_id = $1`,
+        [trip.trip_id]
+      );
+
+      if (trip.driver_id) {
+        await dbRun(
+          `UPDATE drivers SET status = 'online', updated_at = NOW()
+           WHERE driver_id = $1`,
+          [trip.driver_id]
+        );
+      }
+
+      console.log(
+        `[Trips] Cancelled by ${isTripPassenger ? 'passenger' : 'driver'}: ${trip.trip_id}`
+      );
+
+      return res.json({
+        success: true,
+        message: isTripPassenger
+          ? 'Trip cancelled. Driver notified.'
+          : 'Trip cancelled.',
+        cancelled_by: isTripPassenger ? 'passenger' : 'driver',
+      });
+    }
+
+    if (!isAssignedDriver) {
+      return res.status(403).json({ success: false, message: 'Only the assigned driver can update this trip' });
+    }
+
+    if (trip.status === 'cancelled' || trip.status === 'completed') {
+      return res.status(409).json({ success: false, message: `Trip is already ${trip.status}` });
+    }
+
     await dbRun(
       `UPDATE trips
        SET status = $1
@@ -433,6 +495,47 @@ router.get('/driver/history', requireAuth, async (req, res) => {
 // ── POST /api/trips/:tripId/rate ──────────────────────────────────────────────
 // Passenger submits a 1–5 star rating + optional comment after a completed trip.
 // Permanently updates the driver's avg_rating in the drivers table.
+// Get a single trip for owner polling (driver/passenger notification flows)
+router.get('/:tripId', requireAuth, async (req, res) => {
+  try {
+    const trip = await dbGet(
+      `SELECT tr.*,
+              COALESCE(u.full_name, 'Passenger') AS commuter_name,
+              u.phone AS commuter_phone,
+              d.driver_name,
+              d.toda_body_number,
+              d.avg_rating AS driver_rating,
+              t.plate_no,
+              t.vehicle_color
+       FROM trips tr
+       LEFT JOIN users     u ON u.id        = tr.commuter_id
+       LEFT JOIN drivers   d ON d.driver_id = tr.driver_id
+       LEFT JOIN tricycles t ON t.driver_id = d.driver_id
+       WHERE tr.trip_id = $1`,
+      [req.params.tripId]
+    );
+
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+
+    const isAssignedDriver =
+      req.userRole === 'driver' && trip.driver_id === req.userId;
+    const isTripPassenger =
+      ['commuter', 'passenger'].includes(req.userRole) &&
+      trip.commuter_id === req.userId;
+
+    if (!isAssignedDriver && !isTripPassenger) {
+      return res.status(403).json({ success: false, message: 'Not allowed to view this trip' });
+    }
+
+    return res.json({ success: true, trip });
+  } catch (err) {
+    console.error('[Trips] Trip lookup error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 router.post('/:tripId/rate', requireAuth, [
   body('rating')
     .isInt({ min: 1, max: 5 })

@@ -292,7 +292,11 @@ async function initializeDatabase() {
         service_type      TEXT DEFAULT 'solo'
                             CHECK (service_type IN ('solo','shared','express')),
         pickup_location   TEXT,
+        pickup_lat        FLOAT,
+        pickup_lng        FLOAT,
         destination       TEXT,
+        destination_lat   FLOAT,
+        destination_lng   FLOAT,
         fare              NUMERIC(10,2) DEFAULT 0,
         payment_method    TEXT DEFAULT 'cash'
                             CHECK (payment_method IN ('cash','gcash','maya','wallet')),
@@ -303,6 +307,9 @@ async function initializeDatabase() {
         trip_type         TEXT DEFAULT 'instant'
                             CHECK (trip_type IN ('instant','scheduled')),
         scheduled_pickup_at TIMESTAMPTZ,
+        driver_lat        FLOAT,
+        driver_lng        FLOAT,
+        driver_location_updated_at TIMESTAMPTZ,
         request_timestamp TIMESTAMPTZ DEFAULT NOW(),
         pickup_timestamp  TIMESTAMPTZ,
         end_timestamp     TIMESTAMPTZ,
@@ -339,6 +346,27 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS scheduled_pickup_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS pickup_lat FLOAT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS pickup_lng FLOAT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS destination_lat FLOAT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS destination_lng FLOAT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS driver_lat FLOAT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS driver_lng FLOAT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS driver_location_updated_at TIMESTAMPTZ`
     );
     await client.query(
       `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_status_check`

@@ -73,6 +73,22 @@ router.post('/request', requireAuth, [
     .optional({ nullable: true })
     .isISO8601()
     .withMessage('Scheduled pickup time must be a valid date/time'),
+  body('pickupLat')
+    .optional({ nullable: true })
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('Pickup latitude must be valid'),
+  body('pickupLng')
+    .optional({ nullable: true })
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('Pickup longitude must be valid'),
+  body('destinationLat')
+    .optional({ nullable: true })
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('Destination latitude must be valid'),
+  body('destinationLng')
+    .optional({ nullable: true })
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('Destination longitude must be valid'),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -93,6 +109,10 @@ router.post('/request', requireAuth, [
     fare,
     paymentMethod,
     scheduledPickupAt,
+    pickupLat,
+    pickupLng,
+    destinationLat,
+    destinationLng,
   } = req.body;
 
   let serviceType = (req.body.serviceType || 'solo')
@@ -104,6 +124,11 @@ router.post('/request', requireAuth, [
   try {
     const scheduledDate = scheduledPickupAt ? new Date(scheduledPickupAt) : null;
     const isScheduled = !!scheduledDate;
+    const parseCoord = (value) =>
+      value === undefined || value === null || value === ''
+        ? null
+        : parseFloat(value);
+
     if (isScheduled && scheduledDate.getTime() <= Date.now() + 5 * 60 * 1000) {
       return res.status(422).json({
         success: false,
@@ -143,12 +168,14 @@ router.post('/request', requireAuth, [
     await dbRun(
       `INSERT INTO trips
         (trip_id, commuter_id, tricycle_id, driver_id,
-         service_type, pickup_location, destination,
+         service_type, pickup_location, pickup_lat, pickup_lng,
+         destination, destination_lat, destination_lng,
          fare, payment_method, status, trip_type, scheduled_pickup_at,
          request_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())`,
       [tripId, req.userId, driver.tricycle_id, driverId,
-       serviceType, pickupLocation, destination,
+       serviceType, pickupLocation, parseCoord(pickupLat), parseCoord(pickupLng),
+       destination, parseCoord(destinationLat), parseCoord(destinationLng),
        parseFloat(fare), paymentMethod,
        isScheduled ? 'scheduled' : 'requested',
        isScheduled ? 'scheduled' : 'instant',
@@ -420,6 +447,58 @@ router.put('/:tripId/status', requireAuth, [
 });
 
 // ── GET /api/trips/commuter/active ────────────────────────────────────────────
+router.put('/:tripId/driver-location', requireAuth, [
+  body('lat')
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('Driver latitude must be valid'),
+  body('lng')
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('Driver longitude must be valid'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  if (req.userRole !== 'driver') {
+    return res.status(403).json({ success: false, message: 'Driver access only' });
+  }
+
+  try {
+    const trip = await dbGet(
+      `SELECT trip_id, driver_id, status
+       FROM trips
+       WHERE trip_id = $1`,
+      [req.params.tripId]
+    );
+
+    if (!trip || trip.driver_id !== req.userId) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+
+    if (!['accepted','pickup','ongoing'].includes(trip.status)) {
+      return res.status(409).json({
+        success: false,
+        message: `Driver location cannot be updated while trip is ${trip.status}`,
+      });
+    }
+
+    await dbRun(
+      `UPDATE trips
+       SET driver_lat = $1,
+           driver_lng = $2,
+           driver_location_updated_at = NOW()
+       WHERE trip_id = $3`,
+      [parseFloat(req.body.lat), parseFloat(req.body.lng), trip.trip_id]
+    );
+
+    return res.json({ success: true, message: 'Driver location updated' });
+  } catch (err) {
+    console.error('[Trips] Driver location update error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 router.get('/commuter/active', requireAuth, async (req, res) => {
   try {
     const trip = await dbGet(

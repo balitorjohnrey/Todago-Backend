@@ -370,16 +370,6 @@ router.put('/:tripId/status', requireAuth, [
       }
     }
 
-    if (status === 'cancelled') {
-      if (req.userRole === 'driver') {
-        await dbRun(
-          `UPDATE drivers SET status = 'online', updated_at = NOW()
-           WHERE driver_id = $1`,
-          [req.userId]
-        );
-      }
-    }
-
     return res.json({ success: true, message: `Status updated to ${status}` });
   } catch (err) {
     console.error('[Trips] Status update error:', err.message);

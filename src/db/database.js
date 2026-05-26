@@ -299,7 +299,10 @@ async function initializeDatabase() {
         wait_time_seconds INT DEFAULT 0,
         avg_speed_kmh     FLOAT DEFAULT 0,
         status            TEXT DEFAULT 'requested'
-                            CHECK (status IN ('requested','accepted','pickup','ongoing','completed','cancelled')),
+                            CHECK (status IN ('scheduled','requested','accepted','pickup','ongoing','completed','cancelled')),
+        trip_type         TEXT DEFAULT 'instant'
+                            CHECK (trip_type IN ('instant','scheduled')),
+        scheduled_pickup_at TIMESTAMPTZ,
         request_timestamp TIMESTAMPTZ DEFAULT NOW(),
         pickup_timestamp  TIMESTAMPTZ,
         end_timestamp     TIMESTAMPTZ,
@@ -330,6 +333,23 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS avg_speed_kmh FLOAT DEFAULT 0`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS trip_type TEXT DEFAULT 'instant'`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS scheduled_pickup_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_status_check`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD CONSTRAINT trips_status_check
+       CHECK (status IN ('scheduled','requested','accepted','pickup','ongoing','completed','cancelled'))`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_trips_scheduled_pickup
+       ON trips(scheduled_pickup_at)`
     );
 
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────

@@ -69,6 +69,10 @@ router.post('/request', requireAuth, [
   body('paymentMethod')
     .isIn(['cash','gcash','maya','wallet'])
     .withMessage('Invalid payment method'),
+  body('scheduledPickupAt')
+    .optional({ nullable: true })
+    .isISO8601()
+    .withMessage('Scheduled pickup time must be a valid date/time'),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -82,7 +86,14 @@ router.post('/request', requireAuth, [
     });
   }
 
-  const { driverId, pickupLocation, destination, fare, paymentMethod } = req.body;
+  const {
+    driverId,
+    pickupLocation,
+    destination,
+    fare,
+    paymentMethod,
+    scheduledPickupAt,
+  } = req.body;
 
   let serviceType = (req.body.serviceType || 'solo')
     .toLowerCase().replace(/[-\s]/g, '');
@@ -91,6 +102,15 @@ router.post('/request', requireAuth, [
   else serviceType = 'solo';
 
   try {
+    const scheduledDate = scheduledPickupAt ? new Date(scheduledPickupAt) : null;
+    const isScheduled = !!scheduledDate;
+    if (isScheduled && scheduledDate.getTime() <= Date.now() + 5 * 60 * 1000) {
+      return res.status(422).json({
+        success: false,
+        message: 'Scheduled pickup must be at least 5 minutes from now',
+      });
+    }
+
     const driver = await dbGet(
       `SELECT d.driver_id, d.status, d.toda_body_number, d.driver_name,
               t.plate_no, t.tricycle_id
@@ -124,28 +144,38 @@ router.post('/request', requireAuth, [
       `INSERT INTO trips
         (trip_id, commuter_id, tricycle_id, driver_id,
          service_type, pickup_location, destination,
-         fare, payment_method, status, request_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'requested',NOW())`,
+         fare, payment_method, status, trip_type, scheduled_pickup_at,
+         request_timestamp)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())`,
       [tripId, req.userId, driver.tricycle_id, driverId,
        serviceType, pickupLocation, destination,
-       parseFloat(fare), paymentMethod]
+       parseFloat(fare), paymentMethod,
+       isScheduled ? 'scheduled' : 'requested',
+       isScheduled ? 'scheduled' : 'instant',
+       scheduledDate]
     );
 
-    await dbRun(
-      `UPDATE drivers SET status = 'on_trip', updated_at = NOW()
-       WHERE driver_id = $1`,
-      [driverId]
-    );
+    if (!isScheduled) {
+      await dbRun(
+        `UPDATE drivers SET status = 'on_trip', updated_at = NOW()
+         WHERE driver_id = $1`,
+        [driverId]
+      );
+    }
 
     const trip = await dbGet(
       `SELECT * FROM trips WHERE trip_id = $1`, [tripId]
     );
 
-    console.log(`[Trips] Ride requested: ${passenger.full_name} → ${driver.driver_name}`);
+    console.log(
+      `[Trips] ${isScheduled ? 'Reservation scheduled' : 'Ride requested'}: ${passenger.full_name} → ${driver.driver_name}`
+    );
 
     return res.status(201).json({
       success: true,
-      message: 'Ride requested successfully!',
+      message: isScheduled
+        ? 'Scheduled reservation created successfully!'
+        : 'Ride requested successfully!',
       trip: {
         ...trip,
         fare:             parseFloat(trip.fare),
@@ -174,8 +204,15 @@ router.get('/driver/pending', requireAuth, async (req, res) => {
        FROM trips tr
        LEFT JOIN users u ON u.id = tr.commuter_id
        WHERE tr.driver_id = $1
-         AND tr.status    = 'requested'
-       ORDER BY tr.request_timestamp DESC
+         AND (
+           tr.status = 'requested'
+           OR (
+             tr.status = 'scheduled'
+             AND tr.scheduled_pickup_at <= NOW() + INTERVAL '1 hour'
+             AND tr.scheduled_pickup_at >= NOW() - INTERVAL '10 minutes'
+           )
+         )
+       ORDER BY COALESCE(tr.scheduled_pickup_at, tr.request_timestamp) ASC
        LIMIT 1`,
       [req.userId]
     );
@@ -197,7 +234,7 @@ router.put('/:tripId/accept', requireAuth, async (req, res) => {
   try {
     const trip = await dbGet(
       `SELECT * FROM trips
-       WHERE trip_id = $1 AND driver_id = $2 AND status = 'requested'`,
+       WHERE trip_id = $1 AND driver_id = $2 AND status IN ('requested','scheduled')`,
       [req.params.tripId, req.userId]
     );
     if (!trip) {
@@ -210,6 +247,11 @@ router.put('/:tripId/accept', requireAuth, async (req, res) => {
        SET status = 'accepted', pickup_timestamp = NOW()
        WHERE trip_id = $1`,
       [req.params.tripId]
+    );
+    await dbRun(
+      `UPDATE drivers SET status = 'on_trip', updated_at = NOW()
+       WHERE driver_id = $1`,
+      [req.userId]
     );
     console.log(`[Trips] Trip accepted: ${req.params.tripId}`);
     return res.json({ success: true, message: 'Trip accepted! Navigate to pickup.' });
@@ -383,6 +425,7 @@ router.get('/commuter/active', requireAuth, async (req, res) => {
     const trip = await dbGet(
       `SELECT tr.*,
               d.driver_name,
+              d.phone AS driver_phone,
               d.toda_body_number,
               d.avg_rating    AS driver_rating,
               t.plate_no,
@@ -435,7 +478,8 @@ router.get('/driver/active', requireAuth, async (req, res) => {
 router.get('/commuter/history', requireAuth, async (req, res) => {
   try {
     const trips = await dbAll(
-      `SELECT tr.*, d.driver_name, d.toda_body_number, t.plate_no,
+      `SELECT tr.*, d.driver_name, d.phone AS driver_phone,
+              d.toda_body_number, t.plate_no,
               f.rating_score, f.comments AS rating_comment
        FROM trips tr
        LEFT JOIN drivers   d ON d.driver_id = tr.driver_id
@@ -462,6 +506,7 @@ router.get('/driver/history', requireAuth, async (req, res) => {
     const trips = await dbAll(
       `SELECT tr.*,
               COALESCE(u.full_name, 'Passenger') AS commuter_name,
+              u.phone AS commuter_phone,
               cl.commission_amt,
               cl.driver_payout,
               cl.commission_pct,
@@ -482,6 +527,33 @@ router.get('/driver/history', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/trips/driver/scheduled ───────────────────────────────────────────
+router.get('/driver/scheduled', requireAuth, async (req, res) => {
+  if (req.userRole !== 'driver') {
+    return res.status(403).json({ success: false, message: 'Driver access only' });
+  }
+  try {
+    const trips = await dbAll(
+      `SELECT tr.*,
+              COALESCE(u.full_name, 'Passenger') AS commuter_name,
+              u.phone AS commuter_phone
+       FROM trips tr
+       LEFT JOIN users u ON u.id = tr.commuter_id
+       WHERE tr.driver_id = $1
+         AND tr.trip_type = 'scheduled'
+         AND tr.status IN ('scheduled','accepted')
+         AND tr.scheduled_pickup_at >= NOW() - INTERVAL '10 minutes'
+       ORDER BY tr.scheduled_pickup_at ASC
+       LIMIT 50`,
+      [req.userId]
+    );
+    return res.json({ success: true, trips });
+  } catch (err) {
+    console.error('[Trips] driver/scheduled error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // ── POST /api/trips/:tripId/rate ──────────────────────────────────────────────
 // Passenger submits a 1–5 star rating + optional comment after a completed trip.
 // Permanently updates the driver's avg_rating in the drivers table.
@@ -493,6 +565,7 @@ router.get('/:tripId', requireAuth, async (req, res) => {
               COALESCE(u.full_name, 'Passenger') AS commuter_name,
               u.phone AS commuter_phone,
               d.driver_name,
+              d.phone AS driver_phone,
               d.toda_body_number,
               d.avg_rating AS driver_rating,
               t.plate_no,

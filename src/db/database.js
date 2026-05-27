@@ -129,6 +129,9 @@ async function initializeDatabase() {
                            CHECK (status IN ('online','offline','on_trip','suspended')),
         avg_rating       FLOAT DEFAULT 0.0,
         total_trips      INT DEFAULT 0,
+        online_since     TIMESTAMPTZ,
+        online_seconds_today INT DEFAULT 0,
+        online_seconds_date  DATE DEFAULT CURRENT_DATE,
         is_verified      BOOLEAN DEFAULT false,
         is_active        BOOLEAN DEFAULT true,
         role             TEXT DEFAULT 'driver',
@@ -147,6 +150,15 @@ async function initializeDatabase() {
     // Store free-text TODA branch name (no FK constraint)
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS toda_branch_name TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS online_since TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS online_seconds_today INT DEFAULT 0`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS online_seconds_date DATE DEFAULT CURRENT_DATE`
     );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────

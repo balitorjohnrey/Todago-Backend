@@ -8,6 +8,18 @@ const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 
 const router = express.Router();
+const TRICYCLE_AVERAGE_SPEED_KMH = 19.94;
+
+function haversineKm(aLat, aLng, bLat, bLng) {
+  const toRad = (value) => value * Math.PI / 180;
+  const radiusKm = 6371;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat))
+    * Math.sin(dLng / 2) ** 2;
+  return 2 * radiusKm * Math.asin(Math.sqrt(h));
+}
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
@@ -30,6 +42,10 @@ function requireAuth(req, res, next) {
 // ── GET /api/trips/drivers/online ─────────────────────────────────────────────
 router.get('/drivers/online', requireAuth, async (req, res) => {
   try {
+    const pickupLat = Number.parseFloat(req.query.pickupLat);
+    const pickupLng = Number.parseFloat(req.query.pickupLng);
+    const hasPickup = Number.isFinite(pickupLat) && Number.isFinite(pickupLng);
+
     const drivers = await dbAll(
       `SELECT
          d.driver_id,
@@ -43,17 +59,54 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
          t.vehicle_color,
          ta.association_name,
          ta.association_code,
-         ROUND((RANDOM() * 3 + 1)::numeric, 1)  AS distance_km,
-         FLOOR(RANDOM() * 8 + 2)::int            AS eta_minutes
+         COALESCE(gps.latitude, last_trip.driver_lat) AS driver_lat,
+         COALESCE(gps.longitude, last_trip.driver_lng) AS driver_lng
        FROM drivers d
        LEFT JOIN tricycles t         ON t.driver_id  = d.driver_id
        LEFT JOIN toda_associations ta ON ta.toda_id   = d.toda_id
+       LEFT JOIN LATERAL (
+         SELECT latitude, longitude
+         FROM gps_locations
+         WHERE tricycle_id = t.tricycle_id
+         ORDER BY timestamp DESC
+         LIMIT 1
+       ) gps ON true
+       LEFT JOIN LATERAL (
+         SELECT driver_lat, driver_lng
+         FROM trips
+         WHERE driver_id = d.driver_id
+           AND driver_lat IS NOT NULL
+           AND driver_lng IS NOT NULL
+         ORDER BY driver_location_updated_at DESC NULLS LAST,
+                  request_timestamp DESC
+         LIMIT 1
+       ) last_trip ON true
        WHERE d.status    = 'online'
          AND d.is_active = true
        ORDER BY d.avg_rating DESC`,
       []
     );
-    return res.json({ success: true, total: drivers.length, drivers });
+    const enriched = drivers.map((driver) => {
+      const driverLat = Number.parseFloat(driver.driver_lat);
+      const driverLng = Number.parseFloat(driver.driver_lng);
+      const hasDriverLocation =
+        Number.isFinite(driverLat) && Number.isFinite(driverLng);
+      const distanceKm = hasPickup && hasDriverLocation
+        ? haversineKm(pickupLat, pickupLng, driverLat, driverLng)
+        : null;
+      const etaMinutes = distanceKm == null
+        ? null
+        : Math.max(1, Math.ceil((distanceKm / TRICYCLE_AVERAGE_SPEED_KMH) * 60));
+      const { driver_lat, driver_lng, ...safeDriver } = driver;
+      return {
+        ...safeDriver,
+        distance_km: distanceKm == null
+          ? null
+          : Number(distanceKm.toFixed(1)),
+        eta_minutes: etaMinutes,
+      };
+    });
+    return res.json({ success: true, total: enriched.length, drivers: enriched });
   } catch (err) {
     console.error('[Trips] Online drivers error:', err.message);
     return res.status(500).json({ success: false, message: 'Server error' });
@@ -184,7 +237,10 @@ router.post('/request', requireAuth, [
 
     if (!isScheduled) {
       await dbRun(
-        `UPDATE drivers SET status = 'on_trip', updated_at = NOW()
+        `UPDATE drivers
+         SET status = 'on_trip',
+             online_since = COALESCE(online_since, NOW()),
+             updated_at = NOW()
          WHERE driver_id = $1`,
         [driverId]
       );
@@ -276,7 +332,10 @@ router.put('/:tripId/accept', requireAuth, async (req, res) => {
       [req.params.tripId]
     );
     await dbRun(
-      `UPDATE drivers SET status = 'on_trip', updated_at = NOW()
+      `UPDATE drivers
+       SET status = 'on_trip',
+           online_since = COALESCE(online_since, NOW()),
+           updated_at = NOW()
        WHERE driver_id = $1`,
       [req.userId]
     );
@@ -299,7 +358,10 @@ router.put('/:tripId/decline', requireAuth, async (req, res) => {
       [req.params.tripId, req.userId]
     );
     await dbRun(
-      `UPDATE drivers SET status = 'online', updated_at = NOW()
+      `UPDATE drivers
+       SET status = 'online',
+           online_since = COALESCE(online_since, NOW()),
+           updated_at = NOW()
        WHERE driver_id = $1`,
       [req.userId]
     );
@@ -358,7 +420,10 @@ router.put('/:tripId/status', requireAuth, [
 
       if (trip.driver_id) {
         await dbRun(
-          `UPDATE drivers SET status = 'online', updated_at = NOW()
+          `UPDATE drivers
+           SET status = 'online',
+               online_since = COALESCE(online_since, NOW()),
+               updated_at = NOW()
            WHERE driver_id = $1`,
           [trip.driver_id]
         );
@@ -419,6 +484,7 @@ router.put('/:tripId/status', requireAuth, [
           `UPDATE drivers
            SET total_trips = total_trips + 1,
                status      = 'online',
+               online_since = COALESCE(online_since, NOW()),
                updated_at  = NOW()
            WHERE driver_id = $1`,
           [req.userId]

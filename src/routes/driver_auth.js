@@ -41,6 +41,43 @@ function clientIp(req) {
     || req.socket?.remoteAddress || 'unknown';
 }
 
+async function updateDriverAvailability(driverId, status) {
+  await dbRun(
+    `UPDATE drivers
+     SET online_seconds_today = CASE
+           WHEN online_seconds_date IS DISTINCT FROM CURRENT_DATE THEN 0
+           ELSE COALESCE(online_seconds_today, 0)
+         END,
+         online_seconds_date = CURRENT_DATE,
+         online_since = CASE
+           WHEN online_since IS NOT NULL AND online_since::date < CURRENT_DATE
+             THEN date_trunc('day', NOW())
+           ELSE online_since
+         END
+     WHERE driver_id = $1`,
+    [driverId]
+  );
+
+  await dbRun(
+    `UPDATE drivers
+     SET status = $1,
+         updated_at = NOW(),
+         online_seconds_today = CASE
+           WHEN $1 = 'offline' AND online_since IS NOT NULL
+             THEN online_seconds_today
+                  + GREATEST(0, FLOOR(EXTRACT(EPOCH FROM NOW() - online_since)))::int
+           ELSE online_seconds_today
+         END,
+         online_since = CASE
+           WHEN $1 = 'offline' THEN NULL
+           WHEN online_since IS NULL THEN NOW()
+           ELSE online_since
+         END
+     WHERE driver_id = $2`,
+    [status, driverId]
+  );
+}
+
 // ── POST /api/driver/register ─────────────────────────────────────────────────
 // Requires main account JWT in Authorization header.
 // Personal info (name, phone, email) is pulled from the users table automatically
@@ -269,6 +306,70 @@ router.get('/me', requireDriverAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/driver/stats/today ───────────────────────────────────────────────
+router.get('/stats/today', requireDriverAuth, async (req, res) => {
+  try {
+    const stats = await dbGet(
+      `SELECT d.status,
+              d.avg_rating,
+              d.total_trips,
+              (
+                CASE
+                  WHEN d.online_seconds_date = CURRENT_DATE
+                    THEN COALESCE(d.online_seconds_today, 0)
+                  ELSE 0
+                END
+                + CASE
+                    WHEN d.status IN ('online','on_trip') AND d.online_since IS NOT NULL
+                      THEN GREATEST(
+                        0,
+                        FLOOR(EXTRACT(EPOCH FROM NOW() - GREATEST(d.online_since, date_trunc('day', NOW()))))::int
+                      )
+                    ELSE 0
+                  END
+              ) AS online_seconds_today,
+              COALESCE(today.trips_today, 0)::int AS trips_today,
+              COALESCE(today.earnings_today, 0)::float AS earnings_today,
+              COALESCE(today.driver_earnings_today, 0)::float AS driver_earnings_today
+       FROM drivers d
+       LEFT JOIN (
+         SELECT tr.driver_id,
+                COUNT(*) FILTER (
+                  WHERE tr.status = 'completed'
+                    AND tr.end_timestamp::date = CURRENT_DATE
+                ) AS trips_today,
+                SUM(
+                  CASE
+                    WHEN tr.status = 'completed'
+                     AND tr.end_timestamp::date = CURRENT_DATE
+                      THEN COALESCE(tr.fare, 0)
+                    ELSE 0
+                  END
+                ) AS earnings_today,
+                SUM(
+                  CASE
+                    WHEN tr.status = 'completed'
+                     AND tr.end_timestamp::date = CURRENT_DATE
+                      THEN COALESCE(cl.driver_payout, GREATEST(COALESCE(tr.fare, 0) - 5, 0))
+                    ELSE 0
+                  END
+                ) AS driver_earnings_today
+         FROM trips tr
+         LEFT JOIN commission_ledger cl ON cl.trip_id = tr.trip_id
+         WHERE tr.driver_id = $1
+         GROUP BY tr.driver_id
+       ) today ON today.driver_id = d.driver_id
+       WHERE d.driver_id = $1 AND d.is_active IS NOT FALSE`,
+      [req.driverId]
+    );
+    if (!stats) return res.status(404).json({ success: false, message: 'Driver not found' });
+    return res.json({ success: true, stats });
+  } catch (error) {
+    console.error('[Driver] Today stats error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // ── PUT /api/driver/status ────────────────────────────────────────────────────
 router.put('/status', requireDriverAuth, [
   body('status').isIn(['online', 'offline', 'on_trip']).withMessage('Invalid status'),
@@ -278,10 +379,7 @@ router.put('/status', requireDriverAuth, [
     return res.status(422).json({ success: false, message: errors.array()[0].msg });
   }
   try {
-    await dbRun(
-      `UPDATE drivers SET status = $1, updated_at = NOW() WHERE driver_id = $2`,
-      [req.body.status, req.driverId]
-    );
+    await updateDriverAvailability(req.driverId, req.body.status);
     await dbRun(
       `UPDATE tricycles SET status = $1 WHERE driver_id = $2`,
       [req.body.status !== 'offline' ? 'active' : 'inactive', req.driverId]
@@ -294,10 +392,7 @@ router.put('/status', requireDriverAuth, [
 
 // ── POST /api/driver/logout ───────────────────────────────────────────────────
 router.post('/logout', requireDriverAuth, async (req, res) => {
-  await dbRun(
-    `UPDATE drivers SET status = 'offline', updated_at = NOW() WHERE driver_id = $1`,
-    [req.driverId]
-  ).catch(() => {});
+  await updateDriverAvailability(req.driverId, 'offline').catch(() => {});
   return res.json({ success: true, message: 'Logged out successfully' });
 });
 

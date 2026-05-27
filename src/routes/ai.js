@@ -90,9 +90,9 @@ const FAQS = [
   },
   {
     question: 'How do driver earnings work?',
-    answer:
-      'Driver earnings are shown after completing a trip. The app subtracts the TodaGo commission from the passenger fare and shows your payout summary.',
-    keywords: ['earnings', 'income', 'payout', 'commission', 'fare'],
+      answer:
+      'Driver earnings are shown after completing a trip. The payout summary uses the passenger fare for that completed ride.',
+    keywords: ['earnings', 'income', 'payout', 'fare'],
     roles: ['driver'],
   },
   {

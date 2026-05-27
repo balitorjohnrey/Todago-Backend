@@ -160,12 +160,6 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS online_seconds_date DATE DEFAULT CURRENT_DATE`
     );
-    await client.query(
-      `UPDATE drivers
-       SET is_verified = true
-       WHERE toda_id IS NULL
-         AND is_verified IS DISTINCT FROM true`
-    );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────
     await client.query(`
@@ -207,7 +201,7 @@ async function initializeDatabase() {
       ['Driver Basic',   'driver',    0.00, 30,
        '{Accept rides,GPS tracking,Earnings dashboard}'],
       ['Driver Pro',     'driver',  299.00, 30,
-       '{All Basic features,Priority dispatch,Lower commission 8%,Performance analytics}'],
+       '{All Basic features,Priority dispatch,Performance analytics}'],
       ['Commuter Plus',  'commuter', 99.00, 30,
        '{Advance booking,Ride history,Priority matching,Exclusive discounts}'],
     ];
@@ -249,64 +243,6 @@ async function initializeDatabase() {
        SET status = 'cancelled'
        WHERE user_type = 'operator'
          AND status = 'active'`
-    );
-
-    // ── COMMISSION RATES ──────────────────────────────────────────────────────
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS commission_rates (
-        rate_id        TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-        user_type      TEXT NOT NULL CHECK (user_type IN ('driver','operator')),
-        plan_type      TEXT NOT NULL CHECK (plan_type IN ('basic','pro','none')),
-        rate_percent   NUMERIC(5,2) NOT NULL,
-        description    TEXT,
-        is_active      BOOLEAN DEFAULT true,
-        UNIQUE(user_type, plan_type)
-      )
-    `);
-
-    const rates = [
-      ['driver',   'none',  10.00, 'Standard driver commission'],
-      ['driver',   'basic', 10.00, 'Driver Basic commission'],
-      ['driver',   'pro',    8.00, 'Driver Pro reduced commission'],
-      ['operator', 'none',  10.00, 'Standard operator commission'],
-    ];
-    for (const [utype, ptype, rate, desc] of rates) {
-      await client.query(
-        `INSERT INTO commission_rates (user_type, plan_type, rate_percent, description)
-         VALUES ($1,$2,$3,$4)
-         ON CONFLICT (user_type, plan_type) DO NOTHING`,
-        [utype, ptype, rate, desc]
-      );
-    }
-    await client.query(
-      `UPDATE commission_rates
-       SET is_active = false
-       WHERE user_type = 'operator'
-         AND plan_type <> 'none'`
-    );
-
-    // ── COMMISSION LEDGER ─────────────────────────────────────────────────────
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS commission_ledger (
-        ledger_id      TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-        trip_id        TEXT,
-        driver_id      TEXT REFERENCES drivers(driver_id) ON DELETE SET NULL,
-        toda_id        TEXT REFERENCES toda_associations(toda_id) ON DELETE SET NULL,
-        gross_fare     NUMERIC(10,2) NOT NULL,
-        commission_pct NUMERIC(5,2) NOT NULL,
-        commission_amt NUMERIC(10,2) NOT NULL,
-        driver_payout  NUMERIC(10,2) NOT NULL,
-        status         TEXT DEFAULT 'pending'
-                         CHECK (status IN ('pending','paid','disputed')),
-        paid_at        TIMESTAMPTZ,
-        created_at     TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS idx_ledger_driver ON commission_ledger(driver_id)`
-    );
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS idx_ledger_toda ON commission_ledger(toda_id)`
     );
 
     // ── TRIPS ─────────────────────────────────────────────────────────────────

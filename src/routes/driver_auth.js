@@ -70,6 +70,24 @@ async function findTodaAssociation(identifier) {
   );
 }
 
+function normalizeDriverType(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (['associated', 'with_association', 'with-association', 'with association'].includes(raw)) {
+    return 'associated';
+  }
+  return 'independent';
+}
+
+function driverApprovalContext(driver) {
+  const isAssociated = !!driver?.toda_id;
+  return {
+    requiredBy: isAssociated ? 'operator' : 'admin',
+    message: isAssociated
+      ? `Your account is pending operator approval${driver.association_name ? ` for ${driver.association_name}` : ''}. Please wait until your TODA association verifies your application.`
+      : 'Your account is pending admin approval. Please wait until TodaGo verifies your license and independent driver application.',
+  };
+}
+
 function clientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]
     || req.socket?.remoteAddress || 'unknown';
@@ -160,6 +178,7 @@ router.post('/register',
     body('todaBodyNumber').trim().notEmpty().withMessage('Vehicle body number is required'),
     body('plateNo').trim().notEmpty().withMessage('Plate number is required'),
     body('vehicleColor').optional().trim(),
+    body('driverType').optional().trim(),
     body('todaId').optional().trim(),
     body('todaAssociation').optional().trim(),
   ],
@@ -174,14 +193,23 @@ router.post('/register',
       todaBodyNumber,
       plateNo,
       vehicleColor,
+      driverType,
       todaId,
       todaAssociation,
     } = req.body;
     const normalizedLicenseNo = normalizeLicense(licenseNo);
     const normalizedPlateNo = normalizePlate(plateNo);
+    const normalizedDriverType = normalizeDriverType(driverType);
     const associationIdentifier = String(todaId || todaAssociation || '').trim();
 
     try {
+      if (normalizedDriverType === 'associated' && !associationIdentifier) {
+        return res.status(422).json({
+          success: false,
+          message: 'TODA Association Name or Code is required for associated drivers.',
+        });
+      }
+
       // ── FIX: Look up the main account from `users` table using req.userId ──
       // No more commuters table, no more phone number mismatches.
       const mainUser = await dbGet(
@@ -209,12 +237,12 @@ router.post('/register',
       }
 
       let association = null;
-      if (associationIdentifier) {
+      if (normalizedDriverType === 'associated') {
         association = await findTodaAssociation(associationIdentifier);
         if (!association) {
           return res.status(404).json({
             success: false,
-            message: 'TODA association not found. Enter a registered association name or code, or leave it blank to register without an association.',
+            message: 'TODA association not found. Enter a registered association name or code.',
           });
         }
       }
@@ -255,7 +283,7 @@ router.post('/register',
           todaBodyNumber.trim(),
           mainUser.password_hash,
           mainUser.salt,
-          association ? false : true,
+          false,
         ]
       );
 
@@ -285,15 +313,16 @@ router.post('/register',
         [driverId]
       );
 
-      const token = generateDriverToken(driverId);
       console.log(`[Driver] Registered: ${mainUser.full_name} (${driverId})`);
 
       return res.status(201).json({
         success: true,
         message: association
-          ? `Driver registration submitted to ${association.association_name}. Operator approval is required before going online.`
-          : 'Driver account created without a TODA association. Your driver license is registered.',
-        token,
+          ? `Driver registration submitted to ${association.association_name}. Operator approval is required before you can log in.`
+          : 'Independent driver registration submitted. Admin approval is required before you can log in.',
+        token: null,
+        approval_status: 'pending',
+        requires_admin_approval: !association,
         requires_operator_approval: !!association,
         driver: sanitizeDriver(driver),
       });
@@ -306,10 +335,16 @@ router.post('/register',
 );
 
 // ── POST /api/driver/login ────────────────────────────────────────────────────
-// Login: TODA body number + plate number + main account password
+// Login:
+// - Independent drivers use license number + password.
+// - Associated drivers use TODA Association Name/Code + license number + password.
+// Legacy body-number + plate-number login remains accepted for older app builds.
 router.post('/login', [
-  body('todaBodyNumber').trim().notEmpty().withMessage('TODA body number is required'),
-  body('plateNo').trim().notEmpty().withMessage('Plate number is required'),
+  body('driverType').optional().trim(),
+  body('licenseNo').optional().trim(),
+  body('todaAssociation').optional().trim(),
+  body('todaBodyNumber').optional().trim(),
+  body('plateNo').optional().trim(),
   body('password').notEmpty().withMessage('Password is required'),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -317,24 +352,86 @@ router.post('/login', [
     return res.status(422).json({ success: false, message: errors.array()[0].msg });
   }
 
-  const { todaBodyNumber, plateNo, password } = req.body;
+  const {
+    driverType,
+    licenseNo,
+    todaAssociation,
+    todaBodyNumber,
+    plateNo,
+    password,
+  } = req.body;
   const ip = clientIp(req);
-
+  const normalizedDriverType = normalizeDriverType(driverType);
+  const normalizedLicenseNo = normalizeLicense(licenseNo);
+  const associationIdentifier = String(todaAssociation || '').trim();
+  const usingLicenseLogin = normalizedLicenseNo.isNotEmpty;
   const normalizedPlate = normalizePlate(plateNo);
 
-  try {
-    const driver = await dbGet(
-      `SELECT d.*, t.plate_no AS tricycle_plate
-       FROM drivers d
-       LEFT JOIN tricycles t ON t.driver_id = d.driver_id
-       WHERE d.toda_body_number = $1
-         AND d.is_active IS NOT FALSE`,
-      [todaBodyNumber.trim()]
-    );
+  if (!usingLicenseLogin && (!todaBodyNumber || !plateNo)) {
+    return res.status(422).json({
+      success: false,
+      message: 'License number is required. Older logins may use body number and plate number.',
+    });
+  }
+  if (usingLicenseLogin && normalizedDriverType === 'associated' && !associationIdentifier) {
+    return res.status(422).json({
+      success: false,
+      message: 'TODA Association Name or Code is required for associated driver login.',
+    });
+  }
 
-    const plateMatch = driver
+  try {
+    let association = null;
+    if (usingLicenseLogin && normalizedDriverType === 'associated') {
+      association = await findTodaAssociation(associationIdentifier);
+      if (!association) {
+        await dbRun(
+          `INSERT INTO login_attempts (user_type, email, ip_address, success)
+           VALUES ('driver',$1,$2,false)`,
+          [associationIdentifier, ip]
+        ).catch(() => {});
+
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid TODA Association Name or Code, license number, or password',
+        });
+      }
+    }
+
+    const driver = usingLicenseLogin
+      ? await dbGet(
+        `SELECT d.*, t.plate_no AS tricycle_plate,
+                ta.association_name, ta.association_code
+         FROM drivers d
+         LEFT JOIN tricycles t ON t.driver_id = d.driver_id
+         LEFT JOIN toda_associations ta ON ta.toda_id = d.toda_id
+         WHERE d.license_no = $1
+           AND d.is_active IS NOT FALSE
+           AND (
+             ($2::text = 'independent' AND d.toda_id IS NULL)
+             OR ($2::text = 'associated' AND d.toda_id = $3)
+           )
+         LIMIT 1`,
+        [
+          normalizedLicenseNo,
+          normalizedDriverType,
+          association?.toda_id || null,
+        ]
+      )
+      : await dbGet(
+        `SELECT d.*, t.plate_no AS tricycle_plate,
+                ta.association_name, ta.association_code
+         FROM drivers d
+         LEFT JOIN tricycles t ON t.driver_id = d.driver_id
+         LEFT JOIN toda_associations ta ON ta.toda_id = d.toda_id
+         WHERE d.toda_body_number = $1
+           AND d.is_active IS NOT FALSE`,
+        [todaBodyNumber.trim()]
+      );
+
+    const plateMatch = usingLicenseLogin || (driver
       ? (driver.tricycle_plate || '').toLowerCase().replace(/\s/g, '') === normalizedPlate
-      : false;
+      : false);
 
     const dummyHash = '$2b$12$dummyhashfortimingattackXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
     const dummySalt = 'a1b2c3d4e5f6a7b8c9d0e1f2';
@@ -349,12 +446,31 @@ router.post('/login', [
       await dbRun(
         `INSERT INTO login_attempts (user_type, email, ip_address, success)
          VALUES ('driver',$1,$2,false)`,
-        [todaBodyNumber, ip]
+        [usingLicenseLogin ? normalizedLicenseNo : todaBodyNumber, ip]
       ).catch(() => {});
 
       return res.status(401).json({
         success: false,
-        message: 'Invalid TODA body number, plate number, or password',
+        message: usingLicenseLogin
+          ? 'Invalid driver login details or password'
+          : 'Invalid TODA body number, plate number, or password',
+      });
+    }
+
+    if (driver.is_verified !== true) {
+      const approval = driverApprovalContext(driver);
+      await dbRun(
+        `INSERT INTO login_attempts (user_type, email, ip_address, success)
+         VALUES ('driver',$1,$2,false)`,
+        [usingLicenseLogin ? normalizedLicenseNo : todaBodyNumber, ip]
+      ).catch(() => {});
+
+      return res.status(403).json({
+        success: false,
+        code: 'DRIVER_NOT_VERIFIED',
+        verification_required: true,
+        approval_required_by: approval.requiredBy,
+        message: approval.message,
       });
     }
 
@@ -365,7 +481,7 @@ router.post('/login', [
     await dbRun(
       `INSERT INTO login_attempts (user_type, email, ip_address, success)
        VALUES ('driver',$1,$2,true)`,
-      [todaBodyNumber, ip]
+      [usingLicenseLogin ? normalizedLicenseNo : todaBodyNumber, ip]
     ).catch(() => {});
 
     const token = generateDriverToken(driver.driver_id);
@@ -426,8 +542,7 @@ router.get('/stats/today', requireDriverAuth, async (req, res) => {
                   END
               ) AS online_seconds_today,
               COALESCE(today.trips_today, 0)::int AS trips_today,
-              COALESCE(today.earnings_today, 0)::float AS earnings_today,
-              COALESCE(today.driver_earnings_today, 0)::float AS driver_earnings_today
+              COALESCE(today.earnings_today, 0)::float AS earnings_today
        FROM drivers d
        LEFT JOIN (
          SELECT tr.driver_id,
@@ -442,17 +557,8 @@ router.get('/stats/today', requireDriverAuth, async (req, res) => {
                       THEN COALESCE(tr.fare, 0)
                     ELSE 0
                   END
-                ) AS earnings_today,
-                SUM(
-                  CASE
-                    WHEN tr.status = 'completed'
-                     AND tr.end_timestamp::date = CURRENT_DATE
-                      THEN COALESCE(cl.driver_payout, GREATEST(COALESCE(tr.fare, 0) - 5, 0))
-                    ELSE 0
-                  END
-                ) AS driver_earnings_today
+                ) AS earnings_today
          FROM trips tr
-         LEFT JOIN commission_ledger cl ON cl.trip_id = tr.trip_id
          WHERE tr.driver_id = $1
          GROUP BY tr.driver_id
        ) today ON today.driver_id = d.driver_id
@@ -478,18 +584,22 @@ router.put('/status', requireDriverAuth, [
   try {
     if (req.body.status !== 'offline') {
       const driver = await dbGet(
-        `SELECT toda_id, is_verified
-         FROM drivers
-         WHERE driver_id = $1 AND is_active IS NOT FALSE`,
+        `SELECT d.toda_id, d.is_verified, ta.association_name
+         FROM drivers d
+         LEFT JOIN toda_associations ta ON ta.toda_id = d.toda_id
+         WHERE d.driver_id = $1 AND d.is_active IS NOT FALSE`,
         [req.driverId]
       );
       if (!driver) {
         return res.status(404).json({ success: false, message: 'Driver not found' });
       }
-      if (driver.toda_id && driver.is_verified !== true) {
+      if (driver.is_verified !== true) {
+        const approval = driverApprovalContext(driver);
         return res.status(403).json({
           success: false,
-          message: 'Your TODA operator must approve your membership before you can go online.',
+          code: 'DRIVER_NOT_VERIFIED',
+          approval_required_by: approval.requiredBy,
+          message: approval.message,
         });
       }
     }

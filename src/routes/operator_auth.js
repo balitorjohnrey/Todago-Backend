@@ -314,6 +314,58 @@ router.get('/drivers', requireOperatorAuth, async (req, res) => {
   }
 });
 
+// GET /api/operator/fleet
+// Real fleet data for the operator map. Coordinates come from the latest GPS
+// record or the latest active trip location reported by the driver app.
+router.get('/fleet', requireOperatorAuth, async (req, res) => {
+  try {
+    const op = await dbGet(
+      `SELECT toda_id FROM operators WHERE operator_id = $1`,
+      [req.operatorId]
+    );
+    if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
+
+    const drivers = await dbAll(
+      `SELECT d.driver_id, d.driver_name, d.toda_body_number,
+              d.status, d.is_verified, d.avg_rating, d.total_trips,
+              t.plate_no, t.vehicle_color,
+              COALESCE(gps.latitude, last_trip.driver_lat) AS driver_lat,
+              COALESCE(gps.longitude, last_trip.driver_lng) AS driver_lng,
+              COALESCE(gps.timestamp, last_trip.driver_location_updated_at) AS location_updated_at
+       FROM drivers d
+       LEFT JOIN tricycles t ON t.driver_id = d.driver_id
+       LEFT JOIN LATERAL (
+         SELECT latitude, longitude, timestamp
+         FROM gps_locations
+         WHERE tricycle_id = t.tricycle_id
+         ORDER BY timestamp DESC
+         LIMIT 1
+       ) gps ON true
+       LEFT JOIN LATERAL (
+         SELECT driver_lat, driver_lng, driver_location_updated_at
+         FROM trips
+         WHERE driver_id = d.driver_id
+           AND driver_lat IS NOT NULL
+           AND driver_lng IS NOT NULL
+         ORDER BY driver_location_updated_at DESC NULLS LAST,
+                  request_timestamp DESC
+         LIMIT 1
+       ) last_trip ON true
+       WHERE d.toda_id = $1
+         AND d.is_active IS NOT FALSE
+       ORDER BY d.status = 'online' DESC,
+                d.status = 'on_trip' DESC,
+                d.driver_name ASC`,
+      [op.toda_id]
+    );
+
+    return res.json({ success: true, total: drivers.length, drivers });
+  } catch (error) {
+    console.error('[Operator] Fleet error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // PATCH /api/operator/drivers/:driverId/verification
 // Accept or revoke a driver's membership in this operator's TODA association.
 router.patch('/drivers/:driverId/verification', requireOperatorAuth, [
@@ -367,9 +419,10 @@ router.patch('/drivers/:driverId/verification', requireOperatorAuth, [
     }
 
     const updated = await dbGet(
-      `SELECT d.driver_id, d.driver_name, d.phone, d.license_no,
+      `SELECT d.driver_id, d.driver_name, d.email, d.phone, d.license_no,
               d.toda_body_number, d.status, d.avg_rating,
               d.total_trips, d.is_verified, d.created_at,
+              'associated' AS application_type,
               CASE WHEN d.is_verified THEN 'approved' ELSE 'pending' END AS approval_status,
               t.plate_no, t.vehicle_color
        FROM drivers d
@@ -401,11 +454,19 @@ router.get('/stats', requireOperatorAuth, async (req, res) => {
     if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
 
     const todaId = op.toda_id;
-    const [active, total, pending, trips, rev] = await Promise.all([
+    const [active, offline, total, pending, trips, rev, rating] = await Promise.all([
       dbGet(
         `SELECT COUNT(*) FROM drivers
          WHERE toda_id = $1
-           AND status = 'online'
+           AND status IN ('online','on_trip')
+           AND is_verified = true
+           AND is_active IS NOT FALSE`,
+        [todaId]
+      ),
+      dbGet(
+        `SELECT COUNT(*) FROM drivers
+         WHERE toda_id = $1
+           AND status = 'offline'
            AND is_verified = true
            AND is_active IS NOT FALSE`,
         [todaId]
@@ -435,7 +496,15 @@ router.get('/stats', requireOperatorAuth, async (req, res) => {
          JOIN drivers d ON d.driver_id = tr.driver_id
          WHERE d.toda_id = $1
            AND tr.request_timestamp::date = CURRENT_DATE
-           AND tr.status = 'completed'`,
+          AND tr.status = 'completed'`,
+        [todaId]
+      ),
+      dbGet(
+        `SELECT COALESCE(AVG(NULLIF(avg_rating, 0)), 0) AS avg_rating
+         FROM drivers
+         WHERE toda_id = $1
+           AND is_verified = true
+           AND is_active IS NOT FALSE`,
         [todaId]
       ),
     ]);
@@ -443,13 +512,13 @@ router.get('/stats', requireOperatorAuth, async (req, res) => {
     return res.json({
       success: true,
       stats: {
-        active_drivers  : parseInt(active.count),
-        total_drivers   : parseInt(total.count),
-        pending_drivers : parseInt(pending.count),
-        trips_today     : parseInt(trips.count),
-        gross_revenue   : parseFloat(rev.total),
-        commission_due  : parseFloat(rev.total) * 0.10,
-        net_payout      : parseFloat(rev.total) * 0.90,
+        active_drivers: parseInt(active.count, 10),
+        offline_drivers: parseInt(offline.count, 10),
+        total_drivers: parseInt(total.count, 10),
+        pending_drivers: parseInt(pending.count, 10),
+        trips_today: parseInt(trips.count, 10),
+        gross_revenue: parseFloat(rev.total),
+        avg_rating: parseFloat(rating.avg_rating),
       },
     });
   } catch (error) {

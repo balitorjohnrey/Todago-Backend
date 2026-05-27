@@ -472,21 +472,7 @@ router.put('/:tripId/status', requireAuth, [
       );
 
       if (trip && req.userRole === 'driver') {
-        const grossFare    = parseFloat(trip.fare);
-        const commPct      = 0;
-        const commAmt      = 5.0;
-        const driverPayout = +(grossFare - commAmt).toFixed(2);
-
-        await dbRun(
-          `INSERT INTO commission_ledger
-            (ledger_id, trip_id, driver_id, toda_id,
-             gross_fare, commission_pct, commission_amt, driver_payout)
-           VALUES ($1,$2,$3,
-             (SELECT toda_id FROM drivers WHERE driver_id=$3),
-             $4,$5,$6,$7)`,
-          [uuidv4(), trip.trip_id, req.userId,
-           grossFare, commPct, commAmt, driverPayout]
-        );
+        const grossFare = parseFloat(trip.fare);
 
         await dbRun(
           `UPDATE drivers
@@ -498,16 +484,14 @@ router.put('/:tripId/status', requireAuth, [
           [req.userId]
         );
 
-        console.log(`[Trips] Completed: ₱${grossFare} fare, ₱${commAmt} commission`);
+        console.log(`[Trips] Completed: fare=${grossFare}`);
 
         return res.json({
           success: true,
           message: 'Trip completed!',
           earnings: {
-            gross_fare:     grossFare,
-            commission_pct: commPct,
-            commission_amt: commAmt,
-            your_earnings:  driverPayout,
+            gross_fare: grossFare,
+            your_earnings: grossFare,
           },
         });
       }
@@ -660,14 +644,10 @@ router.get('/driver/history', requireAuth, async (req, res) => {
       `SELECT tr.*,
               COALESCE(u.full_name, 'Passenger') AS commuter_name,
               u.phone AS commuter_phone,
-              cl.commission_amt,
-              cl.driver_payout,
-              cl.commission_pct,
               f.rating_score,
               f.comments AS rating_comment
        FROM trips tr
        LEFT JOIN users             u  ON u.id        = tr.commuter_id
-       LEFT JOIN commission_ledger cl ON cl.trip_id  = tr.trip_id
        LEFT JOIN feedback          f  ON f.trip_id   = tr.trip_id
        WHERE tr.driver_id = $1
        ORDER BY tr.request_timestamp DESC

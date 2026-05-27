@@ -16,6 +16,7 @@ app.use(express.urlencoded({ extended: true }));
 const authRouter         = require('./routes/auth');          // the Express router
 const driverAuthRouter   = require('./routes/driver_auth');
 const operatorAuthRouter = require('./routes/operator_auth');
+const adminAuthRouter    = require('./routes/admin_auth');
 const tripsRouter        = require('./routes/trips');
 const subscriptionsRouter = require('./routes/subscriptions');
 const aiRouter = require('./routes/ai');
@@ -25,6 +26,7 @@ app.use('/api/migrate',       migrateRouter);
 app.use('/api/auth',          authRouter);
 app.use('/api/driver',        driverAuthRouter);
 app.use('/api/operator',      operatorAuthRouter);
+app.use('/api/admin',         adminAuthRouter);
 app.use('/api/trips',         tripsRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/ai',            aiRouter);

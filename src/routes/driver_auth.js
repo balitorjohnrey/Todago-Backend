@@ -40,6 +40,15 @@ function normalizeLicense(licenseNo) {
   return String(licenseNo || '').trim().toUpperCase().replace(/\s+/g, '');
 }
 
+function pickLicenseNo(body) {
+  return body.licenseNo
+    || body.license_no
+    || body.licenseNumber
+    || body.driverLicense
+    || body.driver_license
+    || '';
+}
+
 function normalizePlate(plateNo) {
   return String(plateNo || '').trim().toLowerCase().replace(/\s/g, '');
 }
@@ -354,17 +363,17 @@ router.post('/login', [
 
   const {
     driverType,
-    licenseNo,
     todaAssociation,
     todaBodyNumber,
     plateNo,
     password,
   } = req.body;
   const ip = clientIp(req);
+  const licenseNo = pickLicenseNo(req.body);
   const normalizedDriverType = normalizeDriverType(driverType);
   const normalizedLicenseNo = normalizeLicense(licenseNo);
   const associationIdentifier = String(todaAssociation || '').trim();
-  const usingLicenseLogin = normalizedLicenseNo.isNotEmpty;
+  const usingLicenseLogin = normalizedLicenseNo.length > 0;
   const normalizedPlate = normalizePlate(plateNo);
 
   if (!usingLicenseLogin && (!todaBodyNumber || !plateNo)) {

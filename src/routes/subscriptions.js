@@ -37,7 +37,12 @@ function requireAuth(req, res, next) {
 router.get('/plans', async (req, res) => {
   try {
     const { type } = req.query; // ?type=driver | operator | commuter
-    let sql = `SELECT * FROM subscription_plans WHERE is_active = true`;
+    if (type === 'operator') {
+      return res.json({ success: true, plans: [] });
+    }
+    let sql = `SELECT * FROM subscription_plans
+               WHERE is_active = true
+                 AND plan_type <> 'operator'`;
     const params = [];
     if (type) { sql += ` AND plan_type = $1`; params.push(type); }
     sql += ` ORDER BY price ASC`;
@@ -52,11 +57,23 @@ router.get('/plans', async (req, res) => {
 router.post('/subscribe', requireAuth, async (req, res) => {
   const { planId, paymentMethod } = req.body;
   if (!planId) return res.status(400).json({ success: false, message: 'planId is required' });
+  if (req.userRole === 'operator') {
+    return res.status(403).json({
+      success: false,
+      message: 'Operator subscription plans have been removed.',
+    });
+  }
   try {
     const plan = await dbGet(
       `SELECT * FROM subscription_plans WHERE plan_id = $1 AND is_active = true`, [planId]
     );
     if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
+    if (plan.plan_type === 'operator') {
+      return res.status(403).json({
+        success: false,
+        message: 'Operator subscription plans have been removed.',
+      });
+    }
 
     const roleMap = { commuter: 'commuter', driver: 'driver', operator: 'operator' };
     if (plan.plan_type !== roleMap[req.userRole]) {
@@ -97,6 +114,9 @@ router.post('/subscribe', requireAuth, async (req, res) => {
 // ─── GET /api/subscriptions/my ────────────────────────────────────────────────
 router.get('/my', requireAuth, async (req, res) => {
   try {
+    if (req.userRole === 'operator') {
+      return res.json({ success: true, subscription: null, hasSubscription: false });
+    }
     const sub = await dbGet(
       `SELECT s.*, p.plan_name, p.price, p.duration_days, p.features, p.plan_type
        FROM subscriptions s
@@ -115,7 +135,9 @@ router.get('/my', requireAuth, async (req, res) => {
 // ─── GET /api/subscriptions/commission ───────────────────────────────────────
 router.get('/commission', requireAuth, async (req, res) => {
   try {
-    const sub = await dbGet(
+    const sub = req.userRole === 'operator'
+      ? null
+      : await dbGet(
       `SELECT p.plan_name FROM subscriptions s
        JOIN subscription_plans p ON p.plan_id = s.plan_id
        WHERE s.user_id = $1 AND s.user_type = $2 AND s.status = 'active'

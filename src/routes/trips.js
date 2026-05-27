@@ -83,6 +83,7 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
        ) last_trip ON true
        WHERE d.status    = 'online'
          AND d.is_active = true
+         AND d.is_verified = true
        ORDER BY d.avg_rating DESC`,
       []
     );
@@ -190,7 +191,8 @@ router.post('/request', requireAuth, [
     }
 
     const driver = await dbGet(
-      `SELECT d.driver_id, d.status, d.toda_body_number, d.driver_name,
+      `SELECT d.driver_id, d.status, d.is_verified,
+              d.toda_body_number, d.driver_name,
               t.plate_no, t.tricycle_id
        FROM drivers d
        LEFT JOIN tricycles t ON t.driver_id = d.driver_id
@@ -205,6 +207,12 @@ router.post('/request', requireAuth, [
       return res.status(400).json({
         success: false,
         message: 'Driver is no longer available. Please choose another driver.',
+      });
+    }
+    if (driver.is_verified !== true) {
+      return res.status(400).json({
+        success: false,
+        message: 'Driver is pending TODA approval. Please choose another driver.',
       });
     }
 

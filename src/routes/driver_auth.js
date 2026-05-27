@@ -15,7 +15,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const { dbRun, dbGet } = require('../db/database');
+const { dbRun, dbGet, dbAll } = require('../db/database');
 const { verifyPassword } = require('../utils/password');
 
 // ── FIX: requireAuth is now properly exported from auth.js ────────────────────
@@ -34,6 +34,40 @@ function generateDriverToken(driverId) {
 function sanitizeDriver(d) {
   const { password_hash, salt, ...safe } = d;
   return safe;
+}
+
+function normalizeLicense(licenseNo) {
+  return String(licenseNo || '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
+function normalizePlate(plateNo) {
+  return String(plateNo || '').trim().toLowerCase().replace(/\s/g, '');
+}
+
+function isValidLicenseNo(licenseNo) {
+  const normalized = normalizeLicense(licenseNo);
+  return normalized.length >= 5
+    && normalized.length <= 32
+    && /^[A-Z0-9-]+$/.test(normalized);
+}
+
+async function findTodaAssociation(identifier) {
+  const value = String(identifier || '').trim();
+  if (!value) return null;
+
+  return dbGet(
+    `SELECT toda_id, association_name, association_code, is_verified
+     FROM toda_associations
+     WHERE is_active IS NOT FALSE
+       AND (
+         toda_id = $1
+         OR association_code = $1
+         OR LOWER(association_code) = LOWER($1)
+         OR LOWER(association_name) = LOWER($1)
+       )
+     LIMIT 1`,
+    [value]
+  );
 }
 
 function clientIp(req) {
@@ -78,6 +112,39 @@ async function updateDriverAvailability(driverId, status) {
   );
 }
 
+// GET /api/driver/toda-associations
+// Public list used by driver registration so applicants can choose a real
+// operator-created TODA association instead of entering loose free text.
+router.get('/toda-associations', async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const params = [];
+    let where = 'WHERE is_active IS NOT FALSE';
+    if (search) {
+      params.push(`%${search}%`);
+      where += ` AND (
+        association_name ILIKE $1
+        OR association_code ILIKE $1
+        OR region ILIKE $1
+      )`;
+    }
+
+    const associations = await dbAll(
+      `SELECT toda_id, association_name, association_code, region,
+              service_area, is_verified
+       FROM toda_associations
+       ${where}
+       ORDER BY association_name ASC
+       LIMIT 100`,
+      params
+    );
+    return res.json({ success: true, total: associations.length, associations });
+  } catch (error) {
+    console.error('[Driver] TODA association list error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // ── POST /api/driver/register ─────────────────────────────────────────────────
 // Requires main account JWT in Authorization header.
 // Personal info (name, phone, email) is pulled from the users table automatically
@@ -85,11 +152,16 @@ async function updateDriverAvailability(driverId, status) {
 router.post('/register',
   requireAuth, // ← verifies main account token, sets req.userId
   [
-    body('licenseNo').trim().notEmpty().withMessage('License number is required'),
-    body('todaBodyNumber').trim().notEmpty().withMessage('TODA body number is required'),
+    body('licenseNo')
+      .trim()
+      .notEmpty().withMessage('License number is required')
+      .custom((value) => isValidLicenseNo(value))
+      .withMessage('Enter a valid driver license number'),
+    body('todaBodyNumber').trim().notEmpty().withMessage('Vehicle body number is required'),
     body('plateNo').trim().notEmpty().withMessage('Plate number is required'),
     body('vehicleColor').optional().trim(),
     body('todaId').optional().trim(),
+    body('todaAssociation').optional().trim(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -97,7 +169,17 @@ router.post('/register',
       return res.status(422).json({ success: false, message: errors.array()[0].msg });
     }
 
-    const { licenseNo, todaBodyNumber, plateNo, vehicleColor, todaId } = req.body;
+    const {
+      licenseNo,
+      todaBodyNumber,
+      plateNo,
+      vehicleColor,
+      todaId,
+      todaAssociation,
+    } = req.body;
+    const normalizedLicenseNo = normalizeLicense(licenseNo);
+    const normalizedPlateNo = normalizePlate(plateNo);
+    const associationIdentifier = String(todaId || todaAssociation || '').trim();
 
     try {
       // ── FIX: Look up the main account from `users` table using req.userId ──
@@ -126,14 +208,25 @@ router.post('/register',
         });
       }
 
+      let association = null;
+      if (associationIdentifier) {
+        association = await findTodaAssociation(associationIdentifier);
+        if (!association) {
+          return res.status(404).json({
+            success: false,
+            message: 'TODA association not found. Enter a registered association name or code, or leave it blank to register without an association.',
+          });
+        }
+      }
+
       // Duplicate checks for vehicle details
       const checks = [
         ['SELECT driver_id FROM drivers WHERE license_no = $1',
-         [licenseNo], 'License number already registered'],
+         [normalizedLicenseNo], 'License number already registered'],
         ['SELECT driver_id FROM drivers WHERE toda_body_number = $1',
          [todaBodyNumber], 'TODA body number already registered'],
         ['SELECT tricycle_id FROM tricycles WHERE plate_no = $1',
-         [plateNo.trim().toLowerCase().replace(/\s/g, '')],
+         [normalizedPlateNo],
          'Plate number already registered'],
       ];
       for (const [sql, params, msg] of checks) {
@@ -148,20 +241,21 @@ router.post('/register',
       await dbRun(
         `INSERT INTO drivers
           (driver_id, user_id, toda_id, toda_branch_name, driver_name, email, phone,
-           license_no, toda_body_number, password_hash, salt, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'offline')`,
+           license_no, toda_body_number, password_hash, salt, status, is_verified)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'offline',$12)`,
         [
           driverId,
           mainUser.id,
-          null,
-          todaId || null,
+          association?.toda_id || null,
+          association?.association_name || null,
           mainUser.full_name,
           mainUser.email,
           mainUser.phone,
-          licenseNo.trim(),
+          normalizedLicenseNo,
           todaBodyNumber.trim(),
           mainUser.password_hash,
           mainUser.salt,
+          association ? false : true,
         ]
       );
 
@@ -174,8 +268,8 @@ router.post('/register',
         [
           tricycleId,
           driverId,
-          todaId || null,
-          plateNo.trim().toLowerCase().replace(/\s/g, ''),
+          association?.toda_id || null,
+          normalizedPlateNo,
           todaBodyNumber.trim(),
           vehicleColor || null,
         ]
@@ -196,8 +290,11 @@ router.post('/register',
 
       return res.status(201).json({
         success: true,
-        message: 'Driver account created! Pending TODA verification.',
+        message: association
+          ? `Driver registration submitted to ${association.association_name}. Operator approval is required before going online.`
+          : 'Driver account created without a TODA association. Your driver license is registered.',
         token,
+        requires_operator_approval: !!association,
         driver: sanitizeDriver(driver),
       });
 
@@ -223,7 +320,7 @@ router.post('/login', [
   const { todaBodyNumber, plateNo, password } = req.body;
   const ip = clientIp(req);
 
-  const normalizedPlate = plateNo.trim().toLowerCase().replace(/\s/g, '');
+  const normalizedPlate = normalizePlate(plateNo);
 
   try {
     const driver = await dbGet(
@@ -379,6 +476,24 @@ router.put('/status', requireDriverAuth, [
     return res.status(422).json({ success: false, message: errors.array()[0].msg });
   }
   try {
+    if (req.body.status !== 'offline') {
+      const driver = await dbGet(
+        `SELECT toda_id, is_verified
+         FROM drivers
+         WHERE driver_id = $1 AND is_active IS NOT FALSE`,
+        [req.driverId]
+      );
+      if (!driver) {
+        return res.status(404).json({ success: false, message: 'Driver not found' });
+      }
+      if (driver.toda_id && driver.is_verified !== true) {
+        return res.status(403).json({
+          success: false,
+          message: 'Your TODA operator must approve your membership before you can go online.',
+        });
+      }
+    }
+
     await updateDriverAvailability(req.driverId, req.body.status);
     await dbRun(
       `UPDATE tricycles SET status = $1 WHERE driver_id = $2`,

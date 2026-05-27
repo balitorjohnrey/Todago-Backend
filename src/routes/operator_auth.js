@@ -300,15 +300,93 @@ router.get('/drivers', requireOperatorAuth, async (req, res) => {
       `SELECT d.driver_id, d.driver_name, d.phone, d.license_no,
               d.toda_body_number, d.status, d.avg_rating,
               d.total_trips, d.is_verified, d.created_at,
+              CASE WHEN d.is_verified THEN 'approved' ELSE 'pending' END AS approval_status,
               t.plate_no, t.vehicle_color
        FROM drivers d
        LEFT JOIN tricycles t ON t.driver_id = d.driver_id
        WHERE d.toda_id = $1 AND d.is_active IS NOT FALSE
-       ORDER BY d.driver_name`,
+       ORDER BY d.is_verified ASC, d.created_at DESC, d.driver_name`,
       [op.toda_id]
     );
     return res.json({ success: true, total: drivers.length, drivers });
   } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// PATCH /api/operator/drivers/:driverId/verification
+// Accept or revoke a driver's membership in this operator's TODA association.
+router.patch('/drivers/:driverId/verification', requireOperatorAuth, [
+  body('isVerified').isBoolean().withMessage('isVerified must be true or false'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  try {
+    const op = await dbGet(
+      `SELECT toda_id FROM operators WHERE operator_id = $1`,
+      [req.operatorId]
+    );
+    if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
+
+    const driver = await dbGet(
+      `SELECT driver_id, driver_name
+       FROM drivers
+       WHERE driver_id = $1
+         AND toda_id = $2
+         AND is_active IS NOT FALSE`,
+      [req.params.driverId, op.toda_id]
+    );
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found in your TODA association',
+      });
+    }
+
+    const isVerified = req.body.isVerified === true || req.body.isVerified === 'true';
+    await dbRun(
+      `UPDATE drivers
+       SET is_verified = $1,
+           status = CASE
+             WHEN $1 = false AND status <> 'offline' THEN 'offline'
+             ELSE status
+           END,
+           updated_at = NOW()
+       WHERE driver_id = $2`,
+      [isVerified, req.params.driverId]
+    );
+
+    if (!isVerified) {
+      await dbRun(
+        `UPDATE tricycles SET status = 'inactive' WHERE driver_id = $1`,
+        [req.params.driverId]
+      ).catch(() => {});
+    }
+
+    const updated = await dbGet(
+      `SELECT d.driver_id, d.driver_name, d.phone, d.license_no,
+              d.toda_body_number, d.status, d.avg_rating,
+              d.total_trips, d.is_verified, d.created_at,
+              CASE WHEN d.is_verified THEN 'approved' ELSE 'pending' END AS approval_status,
+              t.plate_no, t.vehicle_color
+       FROM drivers d
+       LEFT JOIN tricycles t ON t.driver_id = d.driver_id
+       WHERE d.driver_id = $1`,
+      [req.params.driverId]
+    );
+
+    return res.json({
+      success: true,
+      message: isVerified
+        ? `${driver.driver_name} is approved for your TODA association.`
+        : `${driver.driver_name} membership approval was revoked.`,
+      driver: updated,
+    });
+  } catch (error) {
+    console.error('[Operator] Driver verification error:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -323,15 +401,25 @@ router.get('/stats', requireOperatorAuth, async (req, res) => {
     if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
 
     const todaId = op.toda_id;
-    const [active, total, trips, rev] = await Promise.all([
+    const [active, total, pending, trips, rev] = await Promise.all([
       dbGet(
         `SELECT COUNT(*) FROM drivers
-         WHERE toda_id = $1 AND status = 'online' AND is_active IS NOT FALSE`,
+         WHERE toda_id = $1
+           AND status = 'online'
+           AND is_verified = true
+           AND is_active IS NOT FALSE`,
         [todaId]
       ),
       dbGet(
         `SELECT COUNT(*) FROM drivers
          WHERE toda_id = $1 AND is_active IS NOT FALSE`,
+        [todaId]
+      ),
+      dbGet(
+        `SELECT COUNT(*) FROM drivers
+         WHERE toda_id = $1
+           AND is_verified IS NOT TRUE
+           AND is_active IS NOT FALSE`,
         [todaId]
       ),
       dbGet(
@@ -357,6 +445,7 @@ router.get('/stats', requireOperatorAuth, async (req, res) => {
       stats: {
         active_drivers  : parseInt(active.count),
         total_drivers   : parseInt(total.count),
+        pending_drivers : parseInt(pending.count),
         trips_today     : parseInt(trips.count),
         gross_revenue   : parseFloat(rev.total),
         commission_due  : parseFloat(rev.total) * 0.10,

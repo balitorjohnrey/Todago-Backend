@@ -160,6 +160,12 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS online_seconds_date DATE DEFAULT CURRENT_DATE`
     );
+    await client.query(
+      `UPDATE drivers
+       SET is_verified = true
+       WHERE toda_id IS NULL
+         AND is_verified IS DISTINCT FROM true`
+    );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────
     await client.query(`
@@ -202,10 +208,6 @@ async function initializeDatabase() {
        '{Accept rides,GPS tracking,Earnings dashboard}'],
       ['Driver Pro',     'driver',  299.00, 30,
        '{All Basic features,Priority dispatch,Lower commission 8%,Performance analytics}'],
-      ['Operator Basic', 'operator',  0.00, 30,
-       '{Fleet dashboard,Driver management,Basic reports}'],
-      ['Operator Pro',   'operator',999.00, 30,
-       '{All Basic features,Live fleet map,Advanced analytics,Reduced commission 8%,Priority support}'],
       ['Commuter Plus',  'commuter', 99.00, 30,
        '{Advance booking,Ride history,Priority matching,Exclusive discounts}'],
     ];
@@ -217,6 +219,11 @@ async function initializeDatabase() {
         [name, type, price, days, features]
       );
     }
+    await client.query(
+      `UPDATE subscription_plans
+       SET is_active = false
+       WHERE plan_type = 'operator'`
+    );
 
     // ── USER SUBSCRIPTIONS ────────────────────────────────────────────────────
     await client.query(`
@@ -237,6 +244,12 @@ async function initializeDatabase() {
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_sub_user ON subscriptions(user_id, user_type)`
     );
+    await client.query(
+      `UPDATE subscriptions
+       SET status = 'cancelled'
+       WHERE user_type = 'operator'
+         AND status = 'active'`
+    );
 
     // ── COMMISSION RATES ──────────────────────────────────────────────────────
     await client.query(`
@@ -256,8 +269,6 @@ async function initializeDatabase() {
       ['driver',   'basic', 10.00, 'Driver Basic commission'],
       ['driver',   'pro',    8.00, 'Driver Pro reduced commission'],
       ['operator', 'none',  10.00, 'Standard operator commission'],
-      ['operator', 'basic', 10.00, 'Operator Basic commission'],
-      ['operator', 'pro',    8.00, 'Operator Pro reduced commission'],
     ];
     for (const [utype, ptype, rate, desc] of rates) {
       await client.query(
@@ -267,6 +278,12 @@ async function initializeDatabase() {
         [utype, ptype, rate, desc]
       );
     }
+    await client.query(
+      `UPDATE commission_rates
+       SET is_active = false
+       WHERE user_type = 'operator'
+         AND plan_type <> 'none'`
+    );
 
     // ── COMMISSION LEDGER ─────────────────────────────────────────────────────
     await client.query(`

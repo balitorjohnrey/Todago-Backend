@@ -5,7 +5,8 @@ const { v4: uuidv4 } = require('uuid');
 
 const { dbRun, dbGet }                                        = require('../db/database');
 const { generateSalt, hashPassword,
-        verifyPassword, validatePasswordStrength }             = require('../utils/password');
+        verifyPasswordDetailed,
+        validatePasswordStrength }                             = require('../utils/password');
 
 const router = express.Router();
 
@@ -108,6 +109,7 @@ router.post('/login', [
     // ── FIX: Use constant-time comparison to prevent timing attacks
     //         and handle both old (no-salt) and new (with-salt) accounts
     let passwordMatch = false;
+    let passwordResetRequired = false;
 
     if (user) {
       const userSalt = user.salt;
@@ -117,17 +119,45 @@ router.post('/login', [
         // These users need to reset or re-register.
         // For now: try verifying with just pepper+password (no salt).
         console.log(`[Auth] Legacy account detected for ${email} — no valid salt`);
-        passwordMatch = false; // force them to re-register
+        passwordResetRequired = true;
       } else {
         // ── New account: proper pepper+salt+bcrypt ───────────────────────
-        passwordMatch = await verifyPassword(password, user.password_hash, userSalt);
+        const passwordResult = await verifyPasswordDetailed(password, user.password_hash, userSalt);
+        passwordMatch = passwordResult.match;
+        passwordResetRequired = passwordResult.resetRequired;
+
+        if (passwordResult.legacy && passwordResult.match) {
+          const newSalt = generateSalt();
+          const newHash = await hashPassword(password, newSalt);
+
+          await dbRun(
+            'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3',
+            [newHash, newSalt, user.id]
+          );
+          await dbRun(
+            'UPDATE drivers SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
+            [newHash, newSalt, user.id, email.toLowerCase()]
+          ).catch(() => {});
+          await dbRun(
+            'UPDATE operators SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
+            [newHash, newSalt, user.id, email.toLowerCase()]
+          ).catch(() => {});
+
+          user.password_hash = newHash;
+          user.salt = newSalt;
+          console.log(`[Auth] Migrated legacy password hash for ${email}`);
+        } else if (passwordResult.resetRequired) {
+          console.log(`[Auth] Password reset required for legacy hash: ${email}`);
+        }
         console.log(`[Auth] Login attempt for ${email} — match: ${passwordMatch}`);
       }
     } else {
       // Run a dummy bcrypt to prevent timing attacks
-      const bcrypt = require('bcryptjs');
-      const pepper = process.env.PASSWORD_PEPPER || '';
-      await bcrypt.compare(`${pepper}:dummy:${password}`, '$2b$12$DUMMY_HASH_FOR_TIMING_ATTACK_PREVENTION_XXXX');
+      await verifyPasswordDetailed(
+        password,
+        'v2:$2b$12$rv45F04fsLv5.gOAt41RRevnVbwwjYIGP28gnv4G7tRNQz5TjQ7pC',
+        'a1b2c3d4e5f6a7b8c9d0e1f2'
+      );
       console.log(`[Auth] Login attempt for unknown email: ${email}`);
     }
 
@@ -136,6 +166,13 @@ router.post('/login', [
         'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
         [email, ip, false]
       ).catch(() => {});
+      if (passwordResetRequired) {
+        return res.status(409).json({
+          success: false,
+          code: 'PASSWORD_RESET_REQUIRED',
+          message: 'This older account needs a password reset before login.',
+        });
+      }
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 

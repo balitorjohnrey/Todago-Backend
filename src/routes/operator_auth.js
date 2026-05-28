@@ -20,7 +20,7 @@ const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
-const { verifyPassword } = require('../utils/password');
+const { generateSalt, hashPassword, verifyPasswordDetailed } = require('../utils/password');
 
 // ── FIX: requireAuth is now properly exported from auth.js ────────────────────
 const { requireAuth } = require('./auth');
@@ -220,14 +220,44 @@ router.post('/login', [
       [email.toLowerCase(), todaAssociationId.trim()]
     );
 
-    const dummyHash = '$2b$12$dummyhashfortimingattackXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+    const dummyHash = '$2b$12$rv45F04fsLv5.gOAt41RRevnVbwwjYIGP28gnv4G7tRNQz5TjQ7pC';
     const dummySalt = 'a1b2c3d4e5f6a7b8c9d0e1f2';
 
-    const passwordMatch = await verifyPassword(
-      password,
-      operator ? operator.password_hash : dummyHash,
-      operator ? operator.salt          : dummySalt
-    );
+    let passwordMatch = false;
+    let passwordResetRequired = false;
+
+    if (operator) {
+      const passwordResult = await verifyPasswordDetailed(password, operator.password_hash, operator.salt);
+      passwordMatch = passwordResult.match;
+      passwordResetRequired = passwordResult.resetRequired;
+
+      if (passwordResult.legacy && passwordResult.match) {
+        const newSalt = generateSalt();
+        const newHash = await hashPassword(password, newSalt);
+        const normalizedEmail = email.toLowerCase();
+
+        await dbRun(
+          'UPDATE operators SET password_hash = $1, salt = $2, updated_at = NOW() WHERE operator_id = $3',
+          [newHash, newSalt, operator.operator_id]
+        );
+        await dbRun(
+          'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3 OR email = $4',
+          [newHash, newSalt, operator.user_id || null, normalizedEmail]
+        ).catch(() => {});
+        await dbRun(
+          'UPDATE drivers SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
+          [newHash, newSalt, operator.user_id || null, normalizedEmail]
+        ).catch(() => {});
+
+        operator.password_hash = newHash;
+        operator.salt = newSalt;
+        console.log(`[Operator] Migrated legacy password hash for ${operator.operator_id}`);
+      } else if (passwordResult.resetRequired) {
+        console.log(`[Operator] Password reset required for legacy hash: ${operator.operator_id}`);
+      }
+    } else {
+      await verifyPasswordDetailed(password, `v2:${dummyHash}`, dummySalt);
+    }
 
     if (!operator || !passwordMatch) {
       await dbRun(
@@ -235,6 +265,14 @@ router.post('/login', [
          VALUES ('operator',$1,$2,false)`,
         [email, ip]
       ).catch(() => {});
+
+      if (passwordResetRequired) {
+        return res.status(409).json({
+          success: false,
+          code: 'PASSWORD_RESET_REQUIRED',
+          message: 'This older operator account needs a password reset before login.',
+        });
+      }
 
       return res.status(401).json({
         success: false,

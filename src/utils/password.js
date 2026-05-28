@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const PEPPER = process.env.PASSWORD_PEPPER;
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 const HASH_PREFIX = 'v2:';
+const BCRYPT_MAX_BYTES = 72;
 
 if (!PEPPER || PEPPER.length < 16) {
   throw new Error('[Security] PASSWORD_PEPPER must be set and at least 16 chars.');
@@ -27,6 +28,10 @@ function passwordDigest(plainPassword, salt) {
     .digest('base64url');
 }
 
+function legacyPasswordInput(plainPassword, salt) {
+  return `${PEPPER}:${salt}:${plainPassword}`;
+}
+
 async function hashPassword(plainPassword, salt) {
   if (!plainPassword || typeof plainPassword !== 'string') throw new Error('Invalid password');
   if (!salt || typeof salt !== 'string') throw new Error('Invalid salt');
@@ -36,10 +41,57 @@ async function hashPassword(plainPassword, salt) {
 }
 
 async function verifyPassword(plainPassword, storedHash, storedSalt) {
-  if (!plainPassword || !storedHash || !storedSalt) return false;
-  if (!storedHash.startsWith(HASH_PREFIX)) return false;
-  const digest = passwordDigest(plainPassword, storedSalt);
-  return await bcrypt.compare(digest, storedHash.slice(HASH_PREFIX.length));
+  const result = await verifyPasswordDetailed(plainPassword, storedHash, storedSalt);
+  return result.match;
+}
+
+async function verifyPasswordDetailed(plainPassword, storedHash, storedSalt) {
+  if (!plainPassword) {
+    return { match: false, legacy: false, resetRequired: false };
+  }
+  if (!storedHash || !storedSalt || storedSalt === 'legacy') {
+    return { match: false, legacy: true, resetRequired: true };
+  }
+
+  if (storedHash.startsWith(HASH_PREFIX)) {
+    const digest = passwordDigest(plainPassword, storedSalt);
+    let match = false;
+    try {
+      match = await bcrypt.compare(digest, storedHash.slice(HASH_PREFIX.length));
+    } catch {
+      match = false;
+    }
+    return {
+      match,
+      legacy: false,
+      resetRequired: false,
+    };
+  }
+
+  if (!storedHash.startsWith('$2')) {
+    return { match: false, legacy: true, resetRequired: true };
+  }
+
+  const legacyInput = legacyPasswordInput(plainPassword, storedSalt);
+  let enteredMatches = false;
+  try {
+    enteredMatches = await bcrypt.compare(legacyInput, storedHash);
+  } catch {
+    return { match: false, legacy: true, resetRequired: true };
+  }
+  if (!enteredMatches) {
+    return { match: false, legacy: true, resetRequired: false };
+  }
+
+  const legacyPrefix = `${PEPPER}:${storedSalt}:`;
+  const passwordWasFullyIncluded =
+    Buffer.byteLength(legacyPrefix, 'utf8') < BCRYPT_MAX_BYTES &&
+    Buffer.byteLength(legacyInput, 'utf8') <= BCRYPT_MAX_BYTES;
+  if (!passwordWasFullyIncluded) {
+    return { match: false, legacy: true, resetRequired: true };
+  }
+
+  return { match: true, legacy: true, resetRequired: false };
 }
 
 function validatePasswordStrength(password) {
@@ -52,4 +104,10 @@ function validatePasswordStrength(password) {
   return errors;
 }
 
-module.exports = { generateSalt, hashPassword, verifyPassword, validatePasswordStrength };
+module.exports = {
+  generateSalt,
+  hashPassword,
+  verifyPassword,
+  verifyPasswordDetailed,
+  validatePasswordStrength,
+};

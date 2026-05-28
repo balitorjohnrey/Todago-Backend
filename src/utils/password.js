@@ -1,12 +1,16 @@
 /**
  * TodaGo Password Security — Pepper + Salt + bcrypt
- * Used for ALL user types: passengers, drivers, operators
+ * Used for ALL user types: passengers, drivers, operators.
+ *
+ * bcrypt only reads the first 72 bytes of input. We HMAC the salt + password
+ * with the pepper first, then bcrypt that fixed-size digest.
  */
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
 const PEPPER = process.env.PASSWORD_PEPPER;
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
+const HASH_PREFIX = 'v2:';
 
 if (!PEPPER || PEPPER.length < 16) {
   throw new Error('[Security] PASSWORD_PEPPER must be set and at least 16 chars.');
@@ -16,16 +20,26 @@ function generateSalt() {
   return crypto.randomBytes(16).toString('hex');
 }
 
+function passwordDigest(plainPassword, salt) {
+  return crypto
+    .createHmac('sha256', PEPPER)
+    .update(`${salt}:${plainPassword}`, 'utf8')
+    .digest('base64url');
+}
+
 async function hashPassword(plainPassword, salt) {
   if (!plainPassword || typeof plainPassword !== 'string') throw new Error('Invalid password');
-  const combined = `${PEPPER}:${salt}:${plainPassword}`;
-  return await bcrypt.hash(combined, BCRYPT_ROUNDS);
+  if (!salt || typeof salt !== 'string') throw new Error('Invalid salt');
+  const digest = passwordDigest(plainPassword, salt);
+  const bcryptHash = await bcrypt.hash(digest, BCRYPT_ROUNDS);
+  return `${HASH_PREFIX}${bcryptHash}`;
 }
 
 async function verifyPassword(plainPassword, storedHash, storedSalt) {
   if (!plainPassword || !storedHash || !storedSalt) return false;
-  const combined = `${PEPPER}:${storedSalt}:${plainPassword}`;
-  return await bcrypt.compare(combined, storedHash);
+  if (!storedHash.startsWith(HASH_PREFIX)) return false;
+  const digest = passwordDigest(plainPassword, storedSalt);
+  return await bcrypt.compare(digest, storedHash.slice(HASH_PREFIX.length));
 }
 
 function validatePasswordStrength(password) {

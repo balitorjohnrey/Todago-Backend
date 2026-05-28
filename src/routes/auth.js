@@ -221,6 +221,14 @@ router.post('/fix-legacy-password', [
       'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3',
       [newHash, newSalt, user.id]
     );
+    await dbRun(
+      'UPDATE drivers SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
+      [newHash, newSalt, user.id, email.toLowerCase()]
+    ).catch(() => {});
+    await dbRun(
+      'UPDATE operators SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
+      [newHash, newSalt, user.id, email.toLowerCase()]
+    ).catch(() => {});
     console.log(`[Auth] Password fixed for legacy account: ${email}`);
     return res.json({ success: true, message: 'Password updated. You can now log in.' });
   } catch (error) {

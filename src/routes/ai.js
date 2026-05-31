@@ -9,6 +9,7 @@
 
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const { parseRideIntent } = require('../services/gemini');
 
 const router = express.Router();
 
@@ -189,6 +190,40 @@ router.post('/chat', requireAuth, (req, res) => {
     content: [{ type: 'text', text }],
     text,
   });
+});
+
+router.post('/ride-intent', requireAuth, async (req, res) => {
+  const message = extractMessage(req.body);
+  if (!message.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Message is required',
+    });
+  }
+
+  if (req.userRole === 'driver' || req.userRole === 'operator' || req.userRole === 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Smart ride booking is available for passengers only',
+    });
+  }
+
+  try {
+    const intent = await parseRideIntent(message, {
+      role: req.userRole || 'passenger',
+    });
+
+    return res.json({
+      success: true,
+      intent,
+    });
+  } catch (err) {
+    console.error('[AI] Ride intent error:', err.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Could not understand ride request',
+    });
+  }
 });
 
 module.exports = router;

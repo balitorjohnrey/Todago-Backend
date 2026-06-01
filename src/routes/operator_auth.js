@@ -21,6 +21,10 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
+const {
+  clampInt: clampPeakInt,
+  getPeakHourAnalysis,
+} = require('../utils/peakHourAnalytics');
 const { generateSalt, hashPassword, verifyPasswordDetailed } = require('../utils/password');
 
 // ── FIX: requireAuth is now properly exported from auth.js ────────────────────
@@ -588,6 +592,33 @@ router.get('/analytics/routes', requireOperatorAuth, async (req, res) => {
     });
   } catch (error) {
     console.error('[Operator] Route analytics error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.get('/analytics/peak-hours', requireOperatorAuth, async (req, res) => {
+  try {
+    const op = await dbGet(
+      `SELECT toda_id FROM operators WHERE operator_id = $1`,
+      [req.operatorId]
+    );
+    if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
+
+    const days = clampPeakInt(req.query.days, 30, 1, 365);
+    const limit = clampPeakInt(req.query.limit, 6, 1, 24);
+    const hours = await getPeakHourAnalysis({
+      todaId: op.toda_id,
+      days,
+      limit,
+    });
+
+    return res.json({
+      success: true,
+      range_days: days,
+      hours,
+    });
+  } catch (error) {
+    console.error('[Operator] Peak hour analytics error:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });

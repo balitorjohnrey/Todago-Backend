@@ -9,6 +9,7 @@ const { dbRun, dbGet, dbAll } = require('../db/database');
 
 const router = express.Router();
 const TRICYCLE_AVERAGE_SPEED_KMH = 19.94;
+const DRIVER_LOCATION_FRESHNESS_MINUTES = 5;
 
 function haversineKm(aLat, aLng, bLat, bLng) {
   const toRad = (value) => value * Math.PI / 180;
@@ -59,32 +60,24 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
          t.vehicle_color,
          ta.association_name,
          ta.association_code,
-         COALESCE(gps.latitude, last_trip.driver_lat) AS driver_lat,
-         COALESCE(gps.longitude, last_trip.driver_lng) AS driver_lng
+         gps.latitude AS driver_lat,
+         gps.longitude AS driver_lng,
+         gps.timestamp AS driver_location_updated_at
        FROM drivers d
        LEFT JOIN tricycles t         ON t.driver_id  = d.driver_id
        LEFT JOIN toda_associations ta ON ta.toda_id   = d.toda_id
        LEFT JOIN LATERAL (
-         SELECT latitude, longitude
+         SELECT latitude, longitude, timestamp
          FROM gps_locations
          WHERE tricycle_id = t.tricycle_id
+           AND timestamp >= NOW() - INTERVAL '${DRIVER_LOCATION_FRESHNESS_MINUTES} minutes'
          ORDER BY timestamp DESC
          LIMIT 1
        ) gps ON true
-       LEFT JOIN LATERAL (
-         SELECT driver_lat, driver_lng
-         FROM trips
-         WHERE driver_id = d.driver_id
-           AND driver_lat IS NOT NULL
-           AND driver_lng IS NOT NULL
-         ORDER BY driver_location_updated_at DESC NULLS LAST,
-                  request_timestamp DESC
-         LIMIT 1
-       ) last_trip ON true
        WHERE d.status    = 'online'
          AND d.is_active = true
          AND d.is_verified = true
-       ORDER BY d.avg_rating DESC`,
+       ORDER BY gps.timestamp IS NULL ASC, d.avg_rating DESC`,
       []
     );
     const enriched = drivers.map((driver) => {
@@ -98,9 +91,10 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
       const etaMinutes = distanceKm == null
         ? null
         : Math.max(1, Math.ceil((distanceKm / TRICYCLE_AVERAGE_SPEED_KMH) * 60));
-      const { driver_lat, driver_lng, ...safeDriver } = driver;
+      const { driver_lat, driver_lng, driver_location_updated_at, ...safeDriver } = driver;
       return {
         ...safeDriver,
+        has_fresh_location: hasDriverLocation,
         distance_km: distanceKm == null
           ? null
           : Number(distanceKm.toFixed(1)),

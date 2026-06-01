@@ -358,6 +358,11 @@ async function initializeDatabase() {
     `);
 
     // ── PERFORMANCE REPORTS ───────────────────────────────────────────────────
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_gps_locations_tricycle_timestamp
+       ON gps_locations(tricycle_id, timestamp DESC)`
+    );
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS performance_reports (
         report_id     TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,

@@ -139,6 +139,32 @@ async function updateDriverAvailability(driverId, status) {
   );
 }
 
+function parseFiniteNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function recordDriverGpsLocation(driverId, lat, lng) {
+  const tricycle = await dbGet(
+    `SELECT tricycle_id
+     FROM tricycles
+     WHERE driver_id = $1
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [driverId]
+  );
+
+  if (!tricycle?.tricycle_id) return false;
+
+  await dbRun(
+    `INSERT INTO gps_locations (tricycle_id, latitude, longitude, speed_kmh, timestamp)
+     VALUES ($1, $2, $3, 0, NOW())`,
+    [tricycle.tricycle_id, lat, lng]
+  );
+  return true;
+}
+
 // GET /api/driver/toda-associations
 // Public list used by driver registration so applicants can choose a real
 // operator-created TODA association instead of entering loose free text.
@@ -623,6 +649,14 @@ router.get('/stats/today', requireDriverAuth, async (req, res) => {
 // ── PUT /api/driver/status ────────────────────────────────────────────────────
 router.put('/status', requireDriverAuth, [
   body('status').isIn(['online', 'offline', 'on_trip']).withMessage('Invalid status'),
+  body('lat')
+    .optional({ nullable: true })
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('Latitude must be valid'),
+  body('lng')
+    .optional({ nullable: true })
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('Longitude must be valid'),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -656,9 +690,68 @@ router.put('/status', requireDriverAuth, [
       `UPDATE tricycles SET status = $1 WHERE driver_id = $2`,
       [req.body.status !== 'offline' ? 'active' : 'inactive', req.driverId]
     );
+
+    const lat = parseFiniteNumber(req.body.lat);
+    const lng = parseFiniteNumber(req.body.lng);
+    if (req.body.status !== 'offline' && lat !== null && lng !== null) {
+      await recordDriverGpsLocation(req.driverId, lat, lng);
+    }
+
     return res.json({ success: true, message: `Status: ${req.body.status}` });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to update status' });
+  }
+});
+
+// ── PUT /api/driver/location ──────────────────────────────────────────────────
+// Keep online matching based on fresh GPS while the driver is available.
+router.put('/location', requireDriverAuth, [
+  body('lat')
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('Latitude must be valid'),
+  body('lng')
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('Longitude must be valid'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  try {
+    const driver = await dbGet(
+      `SELECT status, is_verified
+       FROM drivers
+       WHERE driver_id = $1 AND is_active IS NOT FALSE`,
+      [req.driverId]
+    );
+
+    if (!driver) {
+      return res.status(404).json({ success: false, message: 'Driver not found' });
+    }
+    if (driver.is_verified !== true) {
+      return res.status(403).json({ success: false, message: 'Driver is not verified' });
+    }
+    if (!['online', 'on_trip'].includes(driver.status)) {
+      return res.status(409).json({
+        success: false,
+        message: 'Driver location can only be updated while online',
+      });
+    }
+
+    const saved = await recordDriverGpsLocation(
+      req.driverId,
+      parseFloat(req.body.lat),
+      parseFloat(req.body.lng)
+    );
+
+    if (!saved) {
+      return res.status(404).json({ success: false, message: 'Tricycle not found' });
+    }
+
+    return res.json({ success: true, message: 'Driver location updated' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to update location' });
   }
 });
 

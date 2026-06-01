@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const { dbRun, dbGet, dbAll } = require('../db/database');
+const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
 
 const router = express.Router();
 
@@ -110,6 +111,23 @@ router.get('/stats', requireAdminAuth, async (req, res) => {
     });
   } catch (error) {
     console.error('[Admin] Stats error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.get('/analytics/routes', requireAdminAuth, async (req, res) => {
+  try {
+    const days = clampInt(req.query.days, 30, 1, 365);
+    const limit = clampInt(req.query.limit, 6, 1, 20);
+    const routes = await getRoutePerformance({ days, limit });
+
+    return res.json({
+      success: true,
+      range_days: days,
+      routes,
+    });
+  } catch (error) {
+    console.error('[Admin] Route analytics error:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });

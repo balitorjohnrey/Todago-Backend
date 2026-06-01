@@ -171,6 +171,9 @@ router.post('/request', requireAuth, [
     destinationLat,
     destinationLng,
   } = req.body;
+  const routeSegment = `${pickupLocation}`.trim().replace(/\s+/g, ' ')
+    + ' -> '
+    + `${destination}`.trim().replace(/\s+/g, ' ');
 
   let serviceType = (req.body.serviceType || 'solo')
     .toLowerCase().replace(/[-\s]/g, '');
@@ -243,13 +246,15 @@ router.post('/request', requireAuth, [
     await dbRun(
       `INSERT INTO trips
         (trip_id, commuter_id, tricycle_id, driver_id,
+         route_segment,
          service_type, passenger_count, passenger_fare_type,
          pickup_location, pickup_lat, pickup_lng,
          destination, destination_lat, destination_lng,
          fare, payment_method, status, trip_type, scheduled_pickup_at,
          request_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW())`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW())`,
       [tripId, req.userId, driver.tricycle_id, driverId,
+       routeSegment,
        serviceType, passengerCount, passengerFareType,
        pickupLocation, parseCoord(pickupLat), parseCoord(pickupLng),
        destination, parseCoord(destinationLat), parseCoord(destinationLng),

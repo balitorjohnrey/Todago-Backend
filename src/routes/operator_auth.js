@@ -20,6 +20,7 @@ const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
+const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
 const { generateSalt, hashPassword, verifyPasswordDetailed } = require('../utils/password');
 
 // ── FIX: requireAuth is now properly exported from auth.js ────────────────────
@@ -560,6 +561,33 @@ router.get('/stats', requireOperatorAuth, async (req, res) => {
       },
     });
   } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.get('/analytics/routes', requireOperatorAuth, async (req, res) => {
+  try {
+    const op = await dbGet(
+      `SELECT toda_id FROM operators WHERE operator_id = $1`,
+      [req.operatorId]
+    );
+    if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
+
+    const days = clampInt(req.query.days, 30, 1, 365);
+    const limit = clampInt(req.query.limit, 6, 1, 20);
+    const routes = await getRoutePerformance({
+      todaId: op.toda_id,
+      days,
+      limit,
+    });
+
+    return res.json({
+      success: true,
+      range_days: days,
+      routes,
+    });
+  } catch (error) {
+    console.error('[Operator] Route analytics error:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });

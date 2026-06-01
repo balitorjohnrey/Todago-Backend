@@ -37,6 +37,8 @@ router.post('/fix', async (req, res) => {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS salt TEXT NOT NULL DEFAULT 'legacy'`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)`);
     results.push('users table columns ensured');

@@ -36,6 +36,7 @@ async function initializeDatabase() {
         role          TEXT DEFAULT 'passenger',
         is_verified   BOOLEAN DEFAULT false,
         is_active     BOOLEAN DEFAULT true,
+        profile_photo_url TEXT,
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
@@ -47,6 +48,9 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE users ALTER COLUMN is_active SET DEFAULT true`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`
     );
 
     // ── COMMUTERS (kept for backward compat — legacy table) ───────────────────
@@ -134,6 +138,7 @@ async function initializeDatabase() {
         online_seconds_date  DATE DEFAULT CURRENT_DATE,
         is_verified      BOOLEAN DEFAULT false,
         is_active        BOOLEAN DEFAULT true,
+        profile_photo_url TEXT,
         role             TEXT DEFAULT 'driver',
         created_at       TIMESTAMPTZ DEFAULT NOW(),
         updated_at       TIMESTAMPTZ DEFAULT NOW(),
@@ -159,6 +164,9 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS online_seconds_date DATE DEFAULT CURRENT_DATE`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`
     );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────

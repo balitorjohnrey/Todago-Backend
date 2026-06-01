@@ -56,6 +56,7 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
          d.total_trips,
          d.status,
          d.phone,
+         d.profile_photo_url,
          t.plate_no,
          t.vehicle_color,
          ta.association_name,
@@ -187,6 +188,7 @@ router.post('/request', requireAuth, [
     const driver = await dbGet(
       `SELECT d.driver_id, d.status, d.is_verified,
               d.toda_body_number, d.driver_name,
+              d.profile_photo_url,
               t.plate_no, t.tricycle_id
        FROM drivers d
        LEFT JOIN tricycles t ON t.driver_id = d.driver_id
@@ -267,6 +269,7 @@ router.post('/request', requireAuth, [
         driver_name:      driver.driver_name,
         plate_no:         driver.plate_no,
         toda_body_number: driver.toda_body_number,
+        driver_profile_photo_url: driver.profile_photo_url,
         commuter_name:    passenger.full_name,
       },
     });
@@ -557,6 +560,7 @@ router.get('/commuter/active', requireAuth, async (req, res) => {
       `SELECT tr.*,
               d.driver_name,
               d.phone AS driver_phone,
+              d.profile_photo_url AS driver_profile_photo_url,
               d.toda_body_number,
               d.avg_rating    AS driver_rating,
               t.plate_no,
@@ -610,6 +614,7 @@ router.get('/commuter/history', requireAuth, async (req, res) => {
   try {
     const trips = await dbAll(
       `SELECT tr.*, d.driver_name, d.phone AS driver_phone,
+              d.profile_photo_url AS driver_profile_photo_url,
               d.toda_body_number, t.plate_no,
               f.rating_score, f.comments AS rating_comment
        FROM trips tr
@@ -693,6 +698,7 @@ router.get('/:tripId', requireAuth, async (req, res) => {
               u.phone AS commuter_phone,
               d.driver_name,
               d.phone AS driver_phone,
+              d.profile_photo_url AS driver_profile_photo_url,
               d.toda_body_number,
               d.avg_rating AS driver_rating,
               t.plate_no,

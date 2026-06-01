@@ -36,6 +36,14 @@ function sanitizeDriver(d) {
   return safe;
 }
 
+const MAX_PROFILE_PHOTO_DATA_URL_LENGTH = 750000;
+
+function isProfilePhotoDataUrl(value) {
+  if (typeof value !== 'string') return false;
+  if (value.length > MAX_PROFILE_PHOTO_DATA_URL_LENGTH) return false;
+  return /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value);
+}
+
 function normalizeLicense(licenseNo) {
   return String(licenseNo || '').trim().toUpperCase().replace(/\s+/g, '');
 }
@@ -304,8 +312,8 @@ router.post('/register',
       await dbRun(
         `INSERT INTO drivers
           (driver_id, user_id, toda_id, toda_branch_name, driver_name, email, phone,
-           license_no, toda_body_number, password_hash, salt, status, is_verified)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'offline',$12)`,
+           license_no, toda_body_number, password_hash, salt, profile_photo_url, status, is_verified)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'offline',$13)`,
         [
           driverId,
           mainUser.id,
@@ -318,6 +326,7 @@ router.post('/register',
           todaBodyNumber.trim(),
           mainUser.password_hash,
           mainUser.salt,
+          mainUser.profile_photo_url || null,
           false,
         ]
       );
@@ -593,6 +602,53 @@ router.get('/me', requireDriverAuth, async (req, res) => {
 });
 
 // ── GET /api/driver/stats/today ───────────────────────────────────────────────
+// PUT /api/driver/profile-photo
+router.put('/profile-photo', requireDriverAuth, [
+  body('profilePhotoUrl')
+    .custom((value) => value == null || isProfilePhotoDataUrl(String(value).trim()))
+    .withMessage('Profile photo must be a JPEG, PNG, or WebP image under 750 KB'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  const profilePhotoUrl = typeof req.body.profilePhotoUrl === 'string'
+    ? req.body.profilePhotoUrl.trim()
+    : null;
+
+  try {
+    await dbRun(
+      `UPDATE drivers
+       SET profile_photo_url = $1,
+           updated_at = NOW()
+       WHERE driver_id = $2`,
+      [profilePhotoUrl, req.driverId]
+    );
+
+    const driver = await dbGet(
+      `SELECT d.*, t.plate_no, t.vehicle_color,
+              ta.association_name, ta.association_code
+       FROM drivers d
+       LEFT JOIN tricycles t ON t.driver_id = d.driver_id
+       LEFT JOIN toda_associations ta ON ta.toda_id = d.toda_id
+       WHERE d.driver_id = $1 AND d.is_active IS NOT FALSE`,
+      [req.driverId]
+    );
+    if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+    return res.json({
+      success: true,
+      message: 'Profile photo updated',
+      driver: sanitizeDriver(driver),
+    });
+  } catch (error) {
+    console.error('[Driver] Profile photo update error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to update profile photo' });
+  }
+});
+
+// GET /api/driver/stats/today
 router.get('/stats/today', requireDriverAuth, async (req, res) => {
   try {
     const stats = await dbGet(

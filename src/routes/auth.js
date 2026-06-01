@@ -24,6 +24,14 @@ function sanitizeUser(user) {
   return safe;
 }
 
+const MAX_PROFILE_PHOTO_DATA_URL_LENGTH = 750000;
+
+function isProfilePhotoDataUrl(value) {
+  if (typeof value !== 'string') return false;
+  if (value.length > MAX_PROFILE_PHOTO_DATA_URL_LENGTH) return false;
+  return /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value);
+}
+
 function clientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]
     || req.socket?.remoteAddress || 'unknown';
@@ -210,6 +218,40 @@ router.get('/me', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
+// PUT /api/auth/profile-photo
+router.put('/profile-photo', requireAuth, [
+  body('profilePhotoUrl')
+    .custom((value) => value == null || isProfilePhotoDataUrl(String(value).trim()))
+    .withMessage('Profile photo must be a JPEG, PNG, or WebP image under 750 KB'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  const profilePhotoUrl = typeof req.body.profilePhotoUrl === 'string'
+    ? req.body.profilePhotoUrl.trim()
+    : null;
+
+  try {
+    await dbRun(
+      'UPDATE users SET profile_photo_url = $1, updated_at = NOW() WHERE id = $2',
+      [profilePhotoUrl, req.userId]
+    );
+    const user = await dbGet('SELECT * FROM users WHERE id = $1 AND is_active = true', [req.userId]);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    return res.json({
+      success: true,
+      message: 'Profile photo updated',
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    console.error('[Auth] Profile photo update error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to update profile photo' });
+  }
+});
+
+// POST /api/auth/logout
 router.post('/logout', requireAuth, (req, res) => {
   return res.json({ success: true, message: 'Logged out successfully' });
 });

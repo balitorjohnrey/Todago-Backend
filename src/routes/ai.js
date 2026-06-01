@@ -71,7 +71,7 @@ const FAQS = [
   {
     question: 'How do I upload a profile picture?',
     answer:
-      'Open Profile and tap your avatar or Upload Photo. Choose an image from your gallery. The app saves it locally so your profile looks personal on this device.',
+      'Open Profile and tap your avatar or Upload Photo. Choose an image from your gallery. The app syncs it to your account so it stays after login.',
     keywords: ['profile', 'picture', 'photo', 'avatar', 'upload'],
     roles: ['passenger', 'driver'],
   },

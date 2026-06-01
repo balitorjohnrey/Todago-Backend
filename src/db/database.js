@@ -476,6 +476,38 @@ async function initializeDatabase() {
     );
 
     // ── INDEXES ───────────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS fare_rate_bands (
+        band_id          SERIAL PRIMARY KEY,
+        sort_order       INT UNIQUE NOT NULL,
+        min_fuel_price   NUMERIC(10,2) NOT NULL,
+        max_fuel_price   NUMERIC(10,2),
+        regular_fare     NUMERIC(10,2) NOT NULL,
+        discounted_fare  NUMERIC(10,2) NOT NULL,
+        updated_at       TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    const fareBands = [
+      [1, 20, 29.99, 10, 8],
+      [2, 30, 39.99, 12, 10],
+      [3, 40, 49.99, 13, 11],
+      [4, 50, 59.99, 14, 12],
+      [5, 60, 69.99, 15, 13],
+      [6, 70, 79.99, 16, 14],
+      [7, 80, 89.99, 17, 15],
+      [8, 90, 99.99, 18, 16],
+      [9, 100, null, 20, 18],
+    ];
+    for (const band of fareBands) {
+      await client.query(
+        `INSERT INTO fare_rate_bands
+          (sort_order, min_fuel_price, max_fuel_price, regular_fare, discounted_fare)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (sort_order) DO NOTHING`,
+        band
+      );
+    }
+
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`
     );

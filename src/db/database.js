@@ -264,6 +264,9 @@ async function initializeDatabase() {
         route_segment     TEXT,
         service_type      TEXT DEFAULT 'solo'
                             CHECK (service_type IN ('solo','shared','express')),
+        passenger_count   INT DEFAULT 1,
+        passenger_fare_type TEXT DEFAULT 'regular'
+                            CHECK (passenger_fare_type IN ('regular','student','senior','pwd')),
         pickup_location   TEXT,
         pickup_lat        FLOAT,
         pickup_lng        FLOAT,
@@ -331,6 +334,25 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS destination_lng FLOAT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS passenger_count INT DEFAULT 1`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS passenger_fare_type TEXT DEFAULT 'regular'`
+    );
+    await client.query(
+      `UPDATE trips SET passenger_count = 1 WHERE passenger_count IS NULL`
+    );
+    await client.query(
+      `UPDATE trips SET passenger_fare_type = 'regular' WHERE passenger_fare_type IS NULL`
+    );
+    await client.query(
+      `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_passenger_fare_type_check`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD CONSTRAINT trips_passenger_fare_type_check
+       CHECK (passenger_fare_type IN ('regular','student','senior','pwd'))`
     );
     await client.query(
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS driver_lat FLOAT`
@@ -433,6 +455,25 @@ async function initializeDatabase() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+
+    // App-wide operational settings controlled by admin.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(
+      `INSERT INTO app_settings (key, value)
+       VALUES ('fare_fuel_price_per_liter', '80.00')
+       ON CONFLICT (key) DO NOTHING`
+    );
+    await client.query(
+      `INSERT INTO app_settings (key, value)
+       VALUES ('fare_premium_multiplier', '1.30')
+       ON CONFLICT (key) DO NOTHING`
+    );
 
     // ── INDEXES ───────────────────────────────────────────────────────────────
     await client.query(

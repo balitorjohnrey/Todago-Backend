@@ -118,6 +118,14 @@ router.post('/request', requireAuth, [
   body('paymentMethod')
     .isIn(['cash','gcash','maya','wallet'])
     .withMessage('Invalid payment method'),
+  body('passengerCount')
+    .optional({ nullable: true })
+    .isInt({ min: 1, max: 6 })
+    .withMessage('Passenger count must be between 1 and 6'),
+  body('passengerFareType')
+    .optional({ nullable: true })
+    .isIn(['regular','student','senior','pwd'])
+    .withMessage('Invalid passenger fare type'),
   body('scheduledPickupAt')
     .optional({ nullable: true })
     .isISO8601()
@@ -169,6 +177,16 @@ router.post('/request', requireAuth, [
   if (serviceType.includes('express')) serviceType = 'express';
   else if (serviceType.includes('shared')) serviceType = 'shared';
   else serviceType = 'solo';
+
+  const passengerFareType = ['student', 'senior', 'pwd'].includes(
+    (req.body.passengerFareType || '').toString().toLowerCase()
+  )
+    ? req.body.passengerFareType.toString().toLowerCase()
+    : 'regular';
+  const requestedPassengerCount = Number.parseInt(req.body.passengerCount, 10);
+  const passengerCount = serviceType === 'shared'
+    ? Math.min(6, Math.max(2, Number.isFinite(requestedPassengerCount) ? requestedPassengerCount : 2))
+    : 1;
 
   try {
     const scheduledDate = scheduledPickupAt ? new Date(scheduledPickupAt) : null;
@@ -225,13 +243,15 @@ router.post('/request', requireAuth, [
     await dbRun(
       `INSERT INTO trips
         (trip_id, commuter_id, tricycle_id, driver_id,
-         service_type, pickup_location, pickup_lat, pickup_lng,
+         service_type, passenger_count, passenger_fare_type,
+         pickup_location, pickup_lat, pickup_lng,
          destination, destination_lat, destination_lng,
          fare, payment_method, status, trip_type, scheduled_pickup_at,
          request_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW())`,
       [tripId, req.userId, driver.tricycle_id, driverId,
-       serviceType, pickupLocation, parseCoord(pickupLat), parseCoord(pickupLng),
+       serviceType, passengerCount, passengerFareType,
+       pickupLocation, parseCoord(pickupLat), parseCoord(pickupLng),
        destination, parseCoord(destinationLat), parseCoord(destinationLng),
        parseFloat(fare), paymentMethod,
        isScheduled ? 'scheduled' : 'requested',

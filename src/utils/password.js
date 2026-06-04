@@ -3,7 +3,7 @@
  * Used for ALL user types: passengers, drivers, operators.
  *
  * bcrypt only reads the first 72 bytes of input. We HMAC the salt + password
- * with the pepper first, then bcrypt that fixed-size digest.
+ * with the pe\pper first, then bcrypt that fixed-size digest.
  */
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');

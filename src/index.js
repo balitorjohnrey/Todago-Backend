@@ -33,6 +33,17 @@ app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/ai',            aiRouter);
 app.use('/api/fares',         faresRouter);
 
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    status: 'ok',
+    message: 'TODAGO backend is online',
+    health: '/health',
+    apiBase: '/api',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

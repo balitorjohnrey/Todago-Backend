@@ -22,6 +22,7 @@ const subscriptionsRouter = require('./routes/subscriptions');
 const aiRouter = require('./routes/ai');
 const migrateRouter = require('./db/migrate');
 const faresRouter = require('./routes/fares');
+const reportsRouter = require('./routes/reports');
 
 app.use('/api/migrate',       migrateRouter);
 app.use('/api/auth',          authRouter);
@@ -32,6 +33,7 @@ app.use('/api/trips',         tripsRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/ai',            aiRouter);
 app.use('/api/fares',         faresRouter);
+app.use('/api/reports',       reportsRouter);
 
 app.get('/', (req, res) => {
   res.json({

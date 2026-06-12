@@ -263,7 +263,7 @@ async function initializeDatabase() {
         driver_id         TEXT REFERENCES drivers(driver_id) ON DELETE SET NULL,
         route_segment     TEXT,
         service_type      TEXT DEFAULT 'solo'
-                            CHECK (service_type IN ('solo','shared','express')),
+                            CHECK (service_type IN ('solo','shared','express','pickup')),
         passenger_count   INT DEFAULT 1,
         passenger_fare_type TEXT DEFAULT 'regular'
                             CHECK (passenger_fare_type IN ('regular','student','senior','pwd')),
@@ -274,6 +274,13 @@ async function initializeDatabase() {
         destination_lat   FLOAT,
         destination_lng   FLOAT,
         fare              NUMERIC(10,2) DEFAULT 0,
+        other_fee_label   TEXT,
+        other_fee_amount  NUMERIC(10,2) DEFAULT 0,
+        booking_notes     TEXT,
+        pickup_item_description TEXT,
+        pickup_item_weight TEXT,
+        shared_dropoffs   JSONB DEFAULT '[]'::jsonb,
+        remaining_passenger_count INT,
         payment_method    TEXT DEFAULT 'cash'
                             CHECK (payment_method IN ('cash','gcash','maya','wallet')),
         wait_time_seconds INT DEFAULT 0,
@@ -342,6 +349,27 @@ async function initializeDatabase() {
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS passenger_fare_type TEXT DEFAULT 'regular'`
     );
     await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS other_fee_label TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS other_fee_amount NUMERIC(10,2) DEFAULT 0`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS booking_notes TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS pickup_item_description TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS pickup_item_weight TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS shared_dropoffs JSONB DEFAULT '[]'::jsonb`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS remaining_passenger_count INT`
+    );
+    await client.query(
       `UPDATE trips SET passenger_count = 1 WHERE passenger_count IS NULL`
     );
     await client.query(
@@ -353,6 +381,13 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE trips ADD CONSTRAINT trips_passenger_fare_type_check
        CHECK (passenger_fare_type IN ('regular','student','senior','pwd'))`
+    );
+    await client.query(
+      `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_service_type_check`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD CONSTRAINT trips_service_type_check
+       CHECK (service_type IN ('solo','shared','express','pickup'))`
     );
     await client.query(
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS driver_lat FLOAT`
@@ -455,6 +490,85 @@ async function initializeDatabase() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+
+    // Admin-validatable issue reports and system alerts.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS issue_reports (
+        issue_id       TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        reporter_role  TEXT NOT NULL
+                       CHECK (reporter_role IN ('passenger','commuter','driver','operator','system')),
+        reporter_id    TEXT,
+        reporter_name  TEXT,
+        report_type    TEXT NOT NULL,
+        subject_role   TEXT
+                       CHECK (subject_role IS NULL OR subject_role IN ('passenger','commuter','driver','operator','vehicle','trip','system')),
+        subject_id     TEXT,
+        subject_name   TEXT,
+        trip_id        TEXT REFERENCES trips(trip_id) ON DELETE SET NULL,
+        title          TEXT NOT NULL,
+        details        TEXT,
+        metadata       JSONB DEFAULT '{}'::jsonb,
+        priority       TEXT DEFAULT 'normal'
+                       CHECK (priority IN ('low','normal','high','urgent')),
+        status         TEXT DEFAULT 'pending'
+                       CHECK (status IN ('pending','validated','rejected','resolved')),
+        admin_notes    TEXT,
+        validated_at   TIMESTAMPTZ,
+        created_at     TIMESTAMPTZ DEFAULT NOW(),
+        updated_at     TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS reporter_name TEXT`
+    );
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS subject_name TEXT`
+    );
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb`
+    );
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'`
+    );
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS admin_notes TEXT`
+    );
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_issue_reports_status_created
+       ON issue_reports(status, created_at DESC)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_issue_reports_subject
+       ON issue_reports(subject_role, subject_id)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_issue_reports_trip
+       ON issue_reports(trip_id)`
+    );
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS passenger_blacklist (
+        blacklist_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        passenger_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        driver_id    TEXT REFERENCES drivers(driver_id) ON DELETE CASCADE,
+        issue_id     TEXT REFERENCES issue_reports(issue_id) ON DELETE SET NULL,
+        reason       TEXT,
+        is_active    BOOLEAN DEFAULT true,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_passenger_blacklist_lookup
+       ON passenger_blacklist(passenger_id, driver_id, is_active)`
+    );
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_passenger_blacklist_active_unique
+       ON passenger_blacklist(passenger_id, driver_id)
+       WHERE is_active = true`
+    );
 
     // App-wide operational settings controlled by admin.
     await client.query(`

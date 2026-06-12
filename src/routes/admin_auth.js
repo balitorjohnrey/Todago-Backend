@@ -78,7 +78,7 @@ router.post('/login', [
 
 router.get('/stats', requireAdminAuth, async (req, res) => {
   try {
-    const [pendingIndependent, approvedIndependent, pendingAssociated, operators] =
+    const [pendingIndependent, approvedIndependent, pendingAssociated, operators, pendingReports, serviceAlerts] =
       await Promise.all([
         dbGet(
           `SELECT COUNT(*) FROM drivers
@@ -102,6 +102,15 @@ router.get('/stats', requireAdminAuth, async (req, res) => {
           `SELECT COUNT(*) FROM operators
            WHERE is_active IS NOT FALSE`
         ),
+        dbGet(
+          `SELECT COUNT(*) FROM issue_reports
+           WHERE status = 'pending'`
+        ).catch(() => ({ count: 0 })),
+        dbGet(
+          `SELECT COUNT(*) FROM issue_reports
+           WHERE status = 'pending'
+             AND report_type = 'driver_outside_service_area'`
+        ).catch(() => ({ count: 0 })),
       ]);
 
     return res.json({
@@ -111,10 +120,131 @@ router.get('/stats', requireAdminAuth, async (req, res) => {
         approved_independent_drivers: parseInt(approvedIndependent.count, 10),
         pending_associated_drivers: parseInt(pendingAssociated.count, 10),
         operators: parseInt(operators.count, 10),
+        pending_reports: parseInt(pendingReports.count, 10),
+        service_area_alerts: parseInt(serviceAlerts.count, 10),
       },
     });
   } catch (error) {
     console.error('[Admin] Stats error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.get('/reports', requireAdminAuth, async (req, res) => {
+  try {
+    const status = String(req.query.status || 'pending').toLowerCase();
+    const allowedStatuses = ['pending', 'validated', 'rejected', 'resolved', 'all'];
+    const selectedStatus = allowedStatuses.includes(status) ? status : 'pending';
+    const params = [];
+    let where = '';
+    if (selectedStatus !== 'all') {
+      params.push(selectedStatus);
+      where = 'WHERE ir.status = $1';
+    }
+
+    const reports = await dbAll(
+      `SELECT ir.*
+       FROM issue_reports ir
+       ${where}
+       ORDER BY
+         CASE ir.priority
+           WHEN 'urgent' THEN 1
+           WHEN 'high' THEN 2
+           WHEN 'normal' THEN 3
+           ELSE 4
+         END,
+         ir.created_at DESC
+       LIMIT 100`,
+      params
+    );
+
+    return res.json({
+      success: true,
+      total: reports.length,
+      reports,
+    });
+  } catch (error) {
+    console.error('[Admin] Reports list error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.patch('/reports/:issueId/status', requireAdminAuth, [
+  body('status')
+    .isIn(['pending','validated','rejected','resolved'])
+    .withMessage('Invalid report status'),
+  body('adminNotes')
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 800 })
+    .withMessage('Admin notes must be 800 characters or less'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  try {
+    const report = await dbGet(
+      `SELECT *
+       FROM issue_reports
+       WHERE issue_id = $1`,
+      [req.params.issueId]
+    );
+    if (!report) {
+      return res.status(404).json({ success: false, message: 'Report not found' });
+    }
+
+    const status = req.body.status;
+    const adminNotes = req.body.adminNotes ? req.body.adminNotes.trim() : null;
+    await dbRun(
+      `UPDATE issue_reports
+       SET status = $1,
+           admin_notes = $2,
+           validated_at = CASE
+             WHEN $1 IN ('validated','rejected','resolved') THEN NOW()
+             ELSE validated_at
+           END,
+           updated_at = NOW()
+       WHERE issue_id = $3`,
+      [status, adminNotes, report.issue_id]
+    );
+
+    if (
+      status === 'validated' &&
+      report.report_type === 'blacklist_passenger' &&
+      report.reporter_role === 'driver' &&
+      ['passenger', 'commuter'].includes(report.subject_role) &&
+      report.reporter_id &&
+      report.subject_id
+    ) {
+      await dbRun(
+        `INSERT INTO passenger_blacklist
+          (passenger_id, driver_id, issue_id, reason, is_active)
+         VALUES ($1,$2,$3,$4,true)
+         ON CONFLICT DO NOTHING`,
+        [
+          report.subject_id,
+          report.reporter_id,
+          report.issue_id,
+          report.details || report.title,
+        ]
+      ).catch(() => {});
+    }
+
+    const updated = await dbGet(
+      `SELECT * FROM issue_reports WHERE issue_id = $1`,
+      [report.issue_id]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Report status updated.',
+      report: updated,
+    });
+  } catch (error) {
+    console.error('[Admin] Report status error:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });

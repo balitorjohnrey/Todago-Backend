@@ -6,6 +6,7 @@ const { body, validationResult } = require('express-validator');
 const jwt     = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
+const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
 
 const router = express.Router();
 const TRICYCLE_AVERAGE_SPEED_KMH = 19.94;
@@ -20,6 +21,51 @@ function haversineKm(aLat, aLng, bLat, bLng) {
     + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat))
     * Math.sin(dLng / 2) ** 2;
   return 2 * radiusKm * Math.asin(Math.sqrt(h));
+}
+
+function parseCoord(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeOptionalText(value, maxLength = 500) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  return text.slice(0, maxLength);
+}
+
+function normalizeSharedDropoffs(rawDropoffs, passengerCount, fallbackDestination) {
+  if (!Array.isArray(rawDropoffs) || rawDropoffs.length === 0) return [];
+  return rawDropoffs
+    .slice(0, passengerCount)
+    .map((dropoff, index) => {
+      const location = normalizeOptionalText(
+        dropoff.location || dropoff.name || dropoff.destination,
+        180
+      ) || (index === 0 ? fallbackDestination : `Drop-off ${index + 1}`);
+      return {
+        index,
+        label: normalizeOptionalText(dropoff.label, 80) || `Passenger ${index + 1}`,
+        location,
+        lat: parseCoord(dropoff.lat ?? dropoff.latitude),
+        lng: parseCoord(dropoff.lng ?? dropoff.longitude),
+        status: 'pending',
+        dropped_at: null,
+      };
+    });
+}
+
+function parseDropoffs(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -126,6 +172,38 @@ router.post('/request', requireAuth, [
     .optional({ nullable: true })
     .isIn(['regular','student','senior','pwd'])
     .withMessage('Invalid passenger fare type'),
+  body('otherFeeAmount')
+    .optional({ nullable: true })
+    .isFloat({ min: 0, max: 10000 })
+    .withMessage('Other fee must be a valid amount'),
+  body('otherFeeLabel')
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 120 })
+    .withMessage('Other fee label must be 120 characters or less'),
+  body('bookingNotes')
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 800 })
+    .withMessage('Notes must be 800 characters or less'),
+  body('pickupItemDescription')
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 400 })
+    .withMessage('Pickup item details must be 400 characters or less'),
+  body('pickupItemWeight')
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 80 })
+    .withMessage('Pickup item weight note must be 80 characters or less'),
+  body('sharedDropoffs')
+    .optional({ nullable: true })
+    .isArray({ max: 6 })
+    .withMessage('Shared dropoffs must be a list'),
   body('scheduledPickupAt')
     .optional({ nullable: true })
     .isISO8601()
@@ -178,6 +256,7 @@ router.post('/request', requireAuth, [
   let serviceType = (req.body.serviceType || 'solo')
     .toLowerCase().replace(/[-\s]/g, '');
   if (serviceType.includes('express')) serviceType = 'express';
+  else if (serviceType.includes('pickup') || serviceType.includes('delivery')) serviceType = 'pickup';
   else if (serviceType.includes('shared')) serviceType = 'shared';
   else serviceType = 'solo';
 
@@ -190,14 +269,29 @@ router.post('/request', requireAuth, [
   const passengerCount = serviceType === 'shared'
     ? Math.min(6, Math.max(2, Number.isFinite(requestedPassengerCount) ? requestedPassengerCount : 2))
     : 1;
+  const otherFeeAmount = Math.max(
+    0,
+    Number.parseFloat(req.body.otherFeeAmount ?? 0) || 0
+  );
+  const otherFeeLabel = normalizeOptionalText(req.body.otherFeeLabel, 120);
+  const bookingNotes = normalizeOptionalText(req.body.bookingNotes, 800);
+  const pickupItemDescription =
+    normalizeOptionalText(req.body.pickupItemDescription, 400);
+  const pickupItemWeight = normalizeOptionalText(req.body.pickupItemWeight, 80);
+  const sharedDropoffs = serviceType === 'shared'
+    ? normalizeSharedDropoffs(req.body.sharedDropoffs, passengerCount, destination)
+    : [];
+
+  if (serviceType === 'pickup' && !pickupItemDescription) {
+    return res.status(422).json({
+      success: false,
+      message: 'Tell the driver what item to pick up.',
+    });
+  }
 
   try {
     const scheduledDate = scheduledPickupAt ? new Date(scheduledPickupAt) : null;
     const isScheduled = !!scheduledDate;
-    const parseCoord = (value) =>
-      value === undefined || value === null || value === ''
-        ? null
-        : parseFloat(value);
 
     if (isScheduled && scheduledDate.getTime() <= Date.now() + 5 * 60 * 1000) {
       return res.status(422).json({
@@ -242,6 +336,23 @@ router.post('/request', requireAuth, [
       return res.status(404).json({ success: false, message: 'Passenger account not found' });
     }
 
+    const blacklist = await dbGet(
+      `SELECT blacklist_id
+       FROM passenger_blacklist
+       WHERE passenger_id = $1
+         AND is_active = true
+         AND (driver_id = $2 OR driver_id IS NULL)
+       LIMIT 1`,
+      [req.userId, driverId]
+    ).catch(() => null);
+
+    if (blacklist) {
+      return res.status(403).json({
+        success: false,
+        message: 'This passenger cannot book this driver due to a validated admin report.',
+      });
+    }
+
     const tripId = uuidv4();
     await dbRun(
       `INSERT INTO trips
@@ -250,15 +361,22 @@ router.post('/request', requireAuth, [
          service_type, passenger_count, passenger_fare_type,
          pickup_location, pickup_lat, pickup_lng,
          destination, destination_lat, destination_lng,
-         fare, payment_method, status, trip_type, scheduled_pickup_at,
+         fare, other_fee_label, other_fee_amount, booking_notes,
+         pickup_item_description, pickup_item_weight,
+         shared_dropoffs, remaining_passenger_count,
+         payment_method, status, trip_type, scheduled_pickup_at,
          request_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW())`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22,$23,$24,$25,$26,NOW())`,
       [tripId, req.userId, driver.tricycle_id, driverId,
        routeSegment,
        serviceType, passengerCount, passengerFareType,
        pickupLocation, parseCoord(pickupLat), parseCoord(pickupLng),
        destination, parseCoord(destinationLat), parseCoord(destinationLng),
-       parseFloat(fare), paymentMethod,
+       parseFloat(fare), otherFeeLabel, otherFeeAmount, bookingNotes,
+       pickupItemDescription, pickupItemWeight,
+       JSON.stringify(sharedDropoffs),
+       sharedDropoffs.length ? passengerCount : null,
+       paymentMethod,
        isScheduled ? 'scheduled' : 'requested',
        isScheduled ? 'scheduled' : 'instant',
        scheduledDate]
@@ -416,7 +534,9 @@ router.put('/:tripId/status', requireAuth, [
 
   try {
     const trip = await dbGet(
-      `SELECT trip_id, commuter_id, driver_id, status, fare
+      `SELECT trip_id, commuter_id, driver_id, status, fare,
+              service_type, passenger_count, shared_dropoffs,
+              remaining_passenger_count
        FROM trips
        WHERE trip_id = $1`,
       [req.params.tripId]
@@ -480,6 +600,22 @@ router.put('/:tripId/status', requireAuth, [
       return res.status(409).json({ success: false, message: `Trip is already ${trip.status}` });
     }
 
+    if (status === 'completed') {
+      const dropoffs = parseDropoffs(trip.shared_dropoffs);
+      const remaining = Number.parseInt(trip.remaining_passenger_count, 10);
+      if (
+        trip.service_type === 'shared' &&
+        dropoffs.length > 0 &&
+        Number.isFinite(remaining) &&
+        remaining > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: `Drop the remaining ${remaining} passenger${remaining === 1 ? '' : 's'} before completing this shared trip.`,
+        });
+      }
+    }
+
     await dbRun(
       `UPDATE trips
        SET status = $1
@@ -527,6 +663,81 @@ router.put('/:tripId/status', requireAuth, [
 });
 
 // ── GET /api/trips/commuter/active ────────────────────────────────────────────
+// Driver marks the next passenger/dropoff complete on a shared ride.
+router.post('/:tripId/dropoff', requireAuth, async (req, res) => {
+  if (req.userRole !== 'driver') {
+    return res.status(403).json({ success: false, message: 'Driver access only' });
+  }
+
+  try {
+    const trip = await dbGet(
+      `SELECT *
+       FROM trips
+       WHERE trip_id = $1
+         AND driver_id = $2
+         AND status IN ('accepted','pickup','ongoing')`,
+      [req.params.tripId, req.userId]
+    );
+
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Shared trip not found' });
+    }
+    if (trip.service_type !== 'shared') {
+      return res.status(409).json({ success: false, message: 'Drop button is only for shared trips' });
+    }
+
+    const dropoffs = parseDropoffs(trip.shared_dropoffs);
+    if (!dropoffs.length) {
+      return res.status(409).json({ success: false, message: 'This shared trip has no separate dropoff list' });
+    }
+
+    const nextIndex = dropoffs.findIndex((dropoff) => dropoff.status !== 'dropped');
+    if (nextIndex === -1) {
+      return res.status(409).json({ success: false, message: 'All passengers are already dropped' });
+    }
+
+    dropoffs[nextIndex] = {
+      ...dropoffs[nextIndex],
+      status: 'dropped',
+      dropped_at: new Date().toISOString(),
+    };
+
+    const pendingCount = dropoffs.filter((dropoff) => dropoff.status !== 'dropped').length;
+    await dbRun(
+      `UPDATE trips
+       SET shared_dropoffs = $1::jsonb,
+           remaining_passenger_count = $2,
+           status = 'ongoing'
+       WHERE trip_id = $3`,
+      [JSON.stringify(dropoffs), pendingCount, trip.trip_id]
+    );
+
+    const updated = await dbGet(
+      `SELECT tr.*,
+              COALESCE(u.full_name, 'Passenger') AS commuter_name,
+              u.phone AS commuter_phone
+       FROM trips tr
+       LEFT JOIN users u ON u.id = tr.commuter_id
+       WHERE tr.trip_id = $1`,
+      [trip.trip_id]
+    );
+
+    return res.json({
+      success: true,
+      message: pendingCount === 0
+        ? 'Last passenger dropped. You can now complete the trip.'
+        : `Passenger dropped. ${pendingCount} remaining.`,
+      dropped_dropoff: dropoffs[nextIndex],
+      remaining_passenger_count: pendingCount,
+      all_dropped: pendingCount === 0,
+      trip: updated,
+    });
+  } catch (err) {
+    console.error('[Trips] Dropoff error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to mark dropoff' });
+  }
+});
+
 router.put('/:tripId/driver-location', requireAuth, [
   body('lat')
     .isFloat({ min: -90, max: 90 })
@@ -571,6 +782,15 @@ router.put('/:tripId/driver-location', requireAuth, [
        WHERE trip_id = $3`,
       [parseFloat(req.body.lat), parseFloat(req.body.lng), trip.trip_id]
     );
+
+    recordDriverServiceAreaAlert(
+      req.userId,
+      parseFloat(req.body.lat),
+      parseFloat(req.body.lng),
+      { source: 'active_trip', tripId: trip.trip_id }
+    ).catch((error) => {
+      console.error('[Trips] Service area alert error:', error.message);
+    });
 
     return res.json({ success: true, message: 'Driver location updated' });
   } catch (err) {

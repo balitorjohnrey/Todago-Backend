@@ -18,6 +18,7 @@ const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { clampInt, getPeakHourAnalysis } = require('../utils/peakHourAnalytics');
 const { generateSalt, hashPassword, verifyPasswordDetailed } = require('../utils/password');
+const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
 
 // ── FIX: requireAuth is now properly exported from auth.js ────────────────────
 const { requireAuth } = require('./auth');
@@ -171,6 +172,11 @@ async function recordDriverGpsLocation(driverId, lat, lng) {
      VALUES ($1, $2, $3, 0, NOW())`,
     [tricycle.tricycle_id, lat, lng]
   );
+  recordDriverServiceAreaAlert(driverId, lat, lng, {
+    source: 'online_driver_location',
+  }).catch((error) => {
+    console.error('[Driver] Service area alert error:', error.message);
+  });
   return true;
 }
 

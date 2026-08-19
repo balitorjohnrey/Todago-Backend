@@ -282,6 +282,13 @@ router.post('/request', requireAuth, [
     ? normalizeSharedDropoffs(req.body.sharedDropoffs, passengerCount, destination)
     : [];
 
+  if (serviceType === 'shared' && sharedDropoffs.length !== passengerCount) {
+    return res.status(422).json({
+      success: false,
+      message: 'Set one drop-off location for each shared passenger.',
+    });
+  }
+
   if (serviceType === 'pickup' && !pickupItemDescription) {
     return res.status(422).json({
       success: false,

@@ -10,9 +10,12 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({
   limit: '2mb',
-  verify: (req, res, buf) => {
-    if (req.originalUrl?.startsWith('/api/trips/paymongo/webhook')) {
-      req.rawBody = Buffer.from(buf);
+  verify: (req, res, buf, encoding) => {
+    if (
+      req.originalUrl?.startsWith('/api/trips/paymongo/webhook')
+      || req.originalUrl?.startsWith('/api/kyc/persona/webhook')
+    ) {
+      req.rawBody = Buffer.from(buf || '', encoding || 'utf8');
     }
   },
 }));
@@ -30,6 +33,7 @@ const aiRouter = require('./routes/ai');
 const migrateRouter = require('./db/migrate');
 const faresRouter = require('./routes/fares');
 const reportsRouter = require('./routes/reports');
+const { router: kycRouter } = require('./routes/kyc');
 
 app.use('/api/migrate',       migrateRouter);
 app.use('/api/auth',          authRouter);
@@ -41,6 +45,7 @@ app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/ai',            aiRouter);
 app.use('/api/fares',         faresRouter);
 app.use('/api/reports',       reportsRouter);
+app.use('/api/kyc',           kycRouter);
 
 app.get('/', (req, res) => {
   res.json({

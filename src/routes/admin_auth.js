@@ -318,7 +318,9 @@ router.patch('/drivers/:driverId/verification', requireAdminAuth, [
 
   try {
     const driver = await dbGet(
-      `SELECT driver_id, driver_name, toda_id
+      `SELECT driver_id, driver_name, toda_id,
+              identity_provider, identity_is_verified,
+              identity_verification_status
        FROM drivers
        WHERE driver_id = $1
          AND is_active IS NOT FALSE`,
@@ -335,6 +337,15 @@ router.patch('/drivers/:driverId/verification', requireAdminAuth, [
     }
 
     const isVerified = req.body.isVerified === true || req.body.isVerified === 'true';
+    if (isVerified && driver.identity_provider === 'persona' && driver.identity_is_verified !== true) {
+      return res.status(409).json({
+        success: false,
+        code: 'IDENTITY_VERIFICATION_REQUIRED',
+        identity_status: driver.identity_verification_status || 'not_submitted',
+        message: 'Persona identity verification must be approved before driver approval.',
+      });
+    }
+
     await dbRun(
       `UPDATE drivers
        SET is_verified = $1,

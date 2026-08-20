@@ -11,6 +11,11 @@ const {
   pickIdentityPayload,
   validateIdentityPayload,
 } = require('../utils/identityVerification');
+const {
+  createPersonaInquiry,
+  isPersonaConfigured,
+} = require('../services/persona');
+const { savePersonaInquiry } = require('./kyc');
 
 const router = express.Router();
 
@@ -30,9 +35,23 @@ function sanitizeUser(user) {
     valid_id_number,
     valid_id_image_url,
     face_verification_image_url,
+    persona_inquiry_id,
+    persona_account_id,
+    persona_reference_id,
+    persona_last_event,
     ...safe
   } = user;
   return safe;
+}
+
+function optionalIdentityPayload(body) {
+  const identity = pickIdentityPayload(body);
+  const hasManualIdentity = Object.values(identity).some((value) => value);
+  if (hasManualIdentity) {
+    const identityError = validateIdentityPayload(body);
+    if (identityError) return { identityError };
+  }
+  return { identity, hasManualIdentity };
 }
 
 const MAX_PROFILE_PHOTO_DATA_URL_LENGTH = 750000;
@@ -61,11 +80,10 @@ router.post('/register', [
   }
 
   const { fullName, email, phone, password } = req.body;
-  const identityError = validateIdentityPayload(req.body);
+  const { identity, hasManualIdentity, identityError } = optionalIdentityPayload(req.body);
   if (identityError) {
     return res.status(422).json({ success: false, message: identityError });
   }
-  const identity = pickIdentityPayload(req.body);
 
   try {
     const strengthErrors = validatePasswordStrength(password);
@@ -86,14 +104,18 @@ router.post('/register', [
     const salt         = generateSalt();
     const passwordHash = await hashPassword(password, salt);
     const userId       = uuidv4();
+    const personaEnabled = isPersonaConfigured();
+    const identityStatus = hasManualIdentity ? 'submitted' : 'not_submitted';
+    const identityProvider = personaEnabled ? 'persona' : 'manual';
 
     await dbRun(
       `INSERT INTO users
         (id, full_name, email, phone, password_hash, salt,
          valid_id_type, valid_id_number, valid_id_image_url,
          face_verification_image_url, identity_verification_status,
-         identity_submitted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'submitted', NOW())`,
+         identity_provider, identity_is_verified, identity_submitted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false,
+               CASE WHEN $11 = 'submitted' THEN NOW() ELSE NULL END)`,
       [
         userId,
         fullName.trim(),
@@ -105,8 +127,26 @@ router.post('/register', [
         identity.validIdNumber,
         identity.validIdImageUrl,
         identity.faceImageUrl,
+        identityStatus,
+        identityProvider,
       ]
     );
+
+    let persona = null;
+    if (personaEnabled) {
+      try {
+        persona = await createPersonaInquiry({
+          role: 'passenger',
+          entityId: userId,
+          fullName: fullName.trim(),
+          email: email.toLowerCase(),
+          phone: phone.trim(),
+        });
+        await savePersonaInquiry('passenger', userId, persona);
+      } catch (personaError) {
+        console.error('[Auth] Persona inquiry error:', personaError.message);
+      }
+    }
 
     const user  = await dbGet('SELECT * FROM users WHERE id = $1', [userId]);
     const token = generateToken(userId);
@@ -115,9 +155,16 @@ router.post('/register', [
 
     return res.status(201).json({
       success : true,
-      message : 'Passenger account created. Identity proof submitted for verification.',
+      message : persona?.verificationUrl
+        ? 'Passenger account created. Finish Persona identity verification to book rides.'
+        : 'Passenger account created. Identity verification is pending.',
       token,
       user    : sanitizeUser(user),
+      persona : persona ? {
+        inquiryId: persona.inquiryId,
+        verificationUrl: persona.verificationUrl,
+        status: persona.status,
+      } : null,
     });
 
   } catch (error) {
@@ -214,6 +261,29 @@ router.post('/login', [
       [email, ip, true]
     ).catch(() => {});
 
+    let persona = null;
+    let responseUser = user;
+    if (user.identity_provider === 'persona'
+        && user.identity_is_verified !== true
+        && isPersonaConfigured()) {
+      try {
+        persona = await createPersonaInquiry({
+          role: 'passenger',
+          entityId: user.id,
+          fullName: user.full_name,
+          email: user.email,
+          phone: user.phone,
+        });
+        await savePersonaInquiry('passenger', user.id, persona);
+        responseUser = await dbGet(
+          'SELECT * FROM users WHERE id = $1 AND is_active = true',
+          [user.id]
+        ) || user;
+      } catch (personaError) {
+        console.error('[Auth] Persona retry inquiry error:', personaError.message);
+      }
+    }
+
     const token = generateToken(user.id);
     console.log(`[Auth] Login success: ${email} from ${ip}`);
 
@@ -221,7 +291,12 @@ router.post('/login', [
       success : true,
       message : 'Login successful',
       token,
-      user    : sanitizeUser(user),
+      user    : sanitizeUser(responseUser),
+      persona : persona ? {
+        inquiryId: persona.inquiryId,
+        verificationUrl: persona.verificationUrl,
+        status: persona.status,
+      } : null,
     });
 
   } catch (error) {

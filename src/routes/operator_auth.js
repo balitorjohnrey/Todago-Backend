@@ -29,6 +29,11 @@ const {
   pickIdentityPayload,
   validateIdentityPayload,
 } = require('../utils/identityVerification');
+const {
+  createPersonaInquiry,
+  isPersonaConfigured,
+} = require('../services/persona');
+const { savePersonaInquiry } = require('./kyc');
 
 const router = express.Router();
 
@@ -47,9 +52,23 @@ function sanitizeOperator(op) {
     valid_id_number,
     valid_id_image_url,
     face_verification_image_url,
+    persona_inquiry_id,
+    persona_account_id,
+    persona_reference_id,
+    persona_last_event,
     ...safe
   } = op;
   return safe;
+}
+
+function optionalIdentityPayload(body) {
+  const identity = pickIdentityPayload(body);
+  const hasManualIdentity = Object.values(identity).some((value) => value);
+  if (hasManualIdentity) {
+    const identityError = validateIdentityPayload(body);
+    if (identityError) return { identityError };
+  }
+  return { identity, hasManualIdentity };
 }
 
 function clientIp(req) {
@@ -92,11 +111,10 @@ router.post('/register',
       region, contactName, email, phone, password,
       serviceArea, totalTricycles,
     } = req.body;
-    const identityError = validateIdentityPayload(req.body);
+    const { identity, hasManualIdentity, identityError } = optionalIdentityPayload(req.body);
     if (identityError) {
       return res.status(422).json({ success: false, message: identityError });
     }
-    const identity = pickIdentityPayload(req.body);
 
     try {
       const strengthErrors = validatePasswordStrength(password);
@@ -141,6 +159,9 @@ router.post('/register',
 
       const salt = generateSalt();
       const passwordHash = await hashPassword(password, salt);
+      const personaEnabled = isPersonaConfigured();
+      const identityStatus = hasManualIdentity ? 'submitted' : 'not_submitted';
+      const identityProvider = personaEnabled ? 'persona' : 'manual';
 
       const operatorId = uuidv4();
       await dbRun(
@@ -148,8 +169,10 @@ router.post('/register',
           (operator_id, user_id, toda_id, contact_name, email, phone,
            password_hash, salt, toda_body_id, valid_id_type, valid_id_number,
            valid_id_image_url, face_verification_image_url,
-           identity_verification_status, identity_submitted_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'submitted',NOW())`,
+           identity_verification_status, identity_provider,
+           identity_is_verified, identity_submitted_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,false,
+                 CASE WHEN $14 = 'submitted' THEN NOW() ELSE NULL END)`,
         [
           operatorId,
           null,
@@ -164,8 +187,26 @@ router.post('/register',
           identity.validIdNumber,
           identity.validIdImageUrl,
           identity.faceImageUrl,
+          identityStatus,
+          identityProvider,
         ]
       );
+
+      let persona = null;
+      if (personaEnabled) {
+        try {
+          persona = await createPersonaInquiry({
+            role: 'operator',
+            entityId: operatorId,
+            fullName: contactName.trim(),
+            email: email.toLowerCase(),
+            phone: phone.trim(),
+          });
+          await savePersonaInquiry('operator', operatorId, persona);
+        } catch (personaError) {
+          console.error('[Operator] Persona inquiry error:', personaError.message);
+        }
+      }
 
       const operator = await dbGet(
         `SELECT o.*, ta.association_name, ta.association_code,
@@ -181,9 +222,14 @@ router.post('/register',
 
       return res.status(201).json({
         success: true,
-        message: 'Operator account created! Pending LTFRB verification.',
+        message: 'Operator account created. Finish Persona identity verification, then wait for LTFRB review.',
         token: null,
         operator: sanitizeOperator(operator),
+        persona: persona ? {
+          inquiryId: persona.inquiryId,
+          verificationUrl: persona.verificationUrl,
+          status: persona.status,
+        } : null,
       });
 
     } catch (error) {
@@ -283,6 +329,42 @@ router.post('/login', [
       return res.status(401).json({
         success: false,
         message: 'Invalid TODA Association ID, email, or password',
+      });
+    }
+
+    if (operator.identity_provider === 'persona' && operator.identity_is_verified !== true) {
+      let persona = null;
+      if (isPersonaConfigured()) {
+        try {
+          persona = await createPersonaInquiry({
+            role: 'operator',
+            entityId: operator.operator_id,
+            fullName: operator.contact_name,
+            email: operator.email,
+            phone: operator.phone,
+          });
+          await savePersonaInquiry('operator', operator.operator_id, persona);
+        } catch (personaError) {
+          console.error('[Operator] Persona retry inquiry error:', personaError.message);
+        }
+      }
+      await dbRun(
+        `INSERT INTO login_attempts (user_type, email, ip_address, success)
+         VALUES ('operator',$1,$2,false)`,
+        [email, ip]
+      ).catch(() => {});
+
+      return res.status(403).json({
+        success: false,
+        code: 'IDENTITY_VERIFICATION_REQUIRED',
+        verification_required: true,
+        identity_status: operator.identity_verification_status || 'not_submitted',
+        message: 'Complete Persona identity verification before operator login.',
+        persona: persona ? {
+          inquiryId: persona.inquiryId,
+          verificationUrl: persona.verificationUrl,
+          status: persona.status,
+        } : null,
       });
     }
 
@@ -428,7 +510,9 @@ router.patch('/drivers/:driverId/verification', requireOperatorAuth, [
     if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
 
     const driver = await dbGet(
-      `SELECT driver_id, driver_name
+      `SELECT driver_id, driver_name,
+              identity_provider, identity_is_verified,
+              identity_verification_status
        FROM drivers
        WHERE driver_id = $1
          AND toda_id = $2
@@ -443,6 +527,15 @@ router.patch('/drivers/:driverId/verification', requireOperatorAuth, [
     }
 
     const isVerified = req.body.isVerified === true || req.body.isVerified === 'true';
+    if (isVerified && driver.identity_provider === 'persona' && driver.identity_is_verified !== true) {
+      return res.status(409).json({
+        success: false,
+        code: 'IDENTITY_VERIFICATION_REQUIRED',
+        identity_status: driver.identity_verification_status || 'not_submitted',
+        message: 'Persona identity verification must be approved before driver approval.',
+      });
+    }
+
     await dbRun(
       `UPDATE drivers
        SET is_verified = $1,

@@ -455,12 +455,23 @@ router.post('/request', requireAuth, [
     }
 
     const passenger = await dbGet(
-      `SELECT id, full_name, phone FROM users WHERE id = $1 AND is_active = true`,
+      `SELECT id, full_name, phone, identity_provider,
+              identity_is_verified, identity_verification_status
+       FROM users
+       WHERE id = $1 AND is_active = true`,
       [req.userId]
     );
 
     if (!passenger) {
       return res.status(404).json({ success: false, message: 'Passenger account not found' });
+    }
+    if (passenger.identity_provider === 'persona' && passenger.identity_is_verified !== true) {
+      return res.status(403).json({
+        success: false,
+        code: 'IDENTITY_VERIFICATION_REQUIRED',
+        identity_status: passenger.identity_verification_status || 'not_submitted',
+        message: 'Complete Persona identity verification before booking a ride.',
+      });
     }
 
     const blacklist = await dbGet(

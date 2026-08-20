@@ -22,6 +22,11 @@ const {
   pickIdentityPayload,
   validateIdentityPayload,
 } = require('../utils/identityVerification');
+const {
+  createPersonaInquiry,
+  isPersonaConfigured,
+} = require('../services/persona');
+const { savePersonaInquiry } = require('./kyc');
 
 const router = express.Router();
 
@@ -40,9 +45,23 @@ function sanitizeDriver(d) {
     valid_id_number,
     valid_id_image_url,
     face_verification_image_url,
+    persona_inquiry_id,
+    persona_account_id,
+    persona_reference_id,
+    persona_last_event,
     ...safe
   } = d;
   return safe;
+}
+
+function optionalIdentityPayload(body) {
+  const identity = pickIdentityPayload(body);
+  const hasManualIdentity = Object.values(identity).some((value) => value);
+  if (hasManualIdentity) {
+    const identityError = validateIdentityPayload(body);
+    if (identityError) return { identityError };
+  }
+  return { identity, hasManualIdentity };
 }
 
 const MAX_PROFILE_PHOTO_DATA_URL_LENGTH = 750000;
@@ -268,11 +287,10 @@ router.post('/register',
     const normalizedPlateNo = normalizePlate(plateNo);
     const normalizedDriverType = normalizeDriverType(driverType);
     const associationIdentifier = String(todaId || todaAssociation || '').trim();
-    const identityError = validateIdentityPayload(req.body);
+    const { identity, hasManualIdentity, identityError } = optionalIdentityPayload(req.body);
     if (identityError) {
       return res.status(422).json({ success: false, message: identityError });
     }
-    const identity = pickIdentityPayload(req.body);
 
     try {
       const strengthErrors = validatePasswordStrength(password);
@@ -321,6 +339,9 @@ router.post('/register',
       const salt = generateSalt();
       const passwordHash = await hashPassword(password, salt);
       const driverId = uuidv4();
+      const personaEnabled = isPersonaConfigured();
+      const identityStatus = hasManualIdentity ? 'submitted' : 'not_submitted';
+      const identityProvider = personaEnabled ? 'persona' : 'manual';
 
       await dbRun(
         `INSERT INTO drivers
@@ -328,9 +349,10 @@ router.post('/register',
            license_no, toda_body_number, password_hash, salt, profile_photo_url,
            status, is_verified, valid_id_type, valid_id_number, valid_id_image_url,
            face_verification_image_url, identity_verification_status,
-           identity_submitted_at)
+           identity_provider, identity_is_verified, identity_submitted_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'offline',$13,
-                 $14,$15,$16,$17,'submitted',NOW())`,
+                 $14,$15,$16,$17,$18,$19,false,
+                 CASE WHEN $18 = 'submitted' THEN NOW() ELSE NULL END)`,
         [
           driverId,
           null,
@@ -349,6 +371,8 @@ router.post('/register',
           identity.validIdNumber,
           identity.validIdImageUrl,
           identity.faceImageUrl,
+          identityStatus,
+          identityProvider,
         ]
       );
 
@@ -370,6 +394,22 @@ router.post('/register',
         console.error('[Driver] Tricycle insert error:', err.message);
       });
 
+      let persona = null;
+      if (personaEnabled) {
+        try {
+          persona = await createPersonaInquiry({
+            role: 'driver',
+            entityId: driverId,
+            fullName: fullName.trim(),
+            email: email.toLowerCase(),
+            phone: phone.trim(),
+          });
+          await savePersonaInquiry('driver', driverId, persona);
+        } catch (personaError) {
+          console.error('[Driver] Persona inquiry error:', personaError.message);
+        }
+      }
+
       const driver = await dbGet(
         `SELECT d.*, t.plate_no, t.vehicle_color
          FROM drivers d
@@ -383,13 +423,18 @@ router.post('/register',
       return res.status(201).json({
         success: true,
         message: association
-          ? `Driver registration submitted to ${association.association_name}. Operator approval is required before you can log in.`
-          : 'Independent driver registration submitted. Admin approval is required before you can log in.',
+          ? `Driver registration submitted to ${association.association_name}. Finish Persona identity verification, then wait for operator approval.`
+          : 'Independent driver registration submitted. Finish Persona identity verification, then wait for admin approval.',
         token: null,
         approval_status: 'pending',
         requires_admin_approval: !association,
         requires_operator_approval: !!association,
         driver: sanitizeDriver(driver),
+        persona: persona ? {
+          inquiryId: persona.inquiryId,
+          verificationUrl: persona.verificationUrl,
+          status: persona.status,
+        } : null,
       });
 
     } catch (error) {
@@ -548,6 +593,42 @@ router.post('/login', [
         message: usingLicenseLogin
           ? 'Invalid driver login details or password'
           : 'Invalid TODA body number, plate number, or password',
+      });
+    }
+
+    if (driver.identity_provider === 'persona' && driver.identity_is_verified !== true) {
+      let persona = null;
+      if (isPersonaConfigured()) {
+        try {
+          persona = await createPersonaInquiry({
+            role: 'driver',
+            entityId: driver.driver_id,
+            fullName: driver.driver_name,
+            email: driver.email,
+            phone: driver.phone,
+          });
+          await savePersonaInquiry('driver', driver.driver_id, persona);
+        } catch (personaError) {
+          console.error('[Driver] Persona retry inquiry error:', personaError.message);
+        }
+      }
+      await dbRun(
+        `INSERT INTO login_attempts (user_type, email, ip_address, success)
+         VALUES ('driver',$1,$2,false)`,
+        [usingLicenseLogin ? normalizedLicenseNo : todaBodyNumber, ip]
+      ).catch(() => {});
+
+      return res.status(403).json({
+        success: false,
+        code: 'IDENTITY_VERIFICATION_REQUIRED',
+        verification_required: true,
+        identity_status: driver.identity_verification_status || 'not_submitted',
+        message: 'Complete Persona identity verification before driver login.',
+        persona: persona ? {
+          inquiryId: persona.inquiryId,
+          verificationUrl: persona.verificationUrl,
+          status: persona.status,
+        } : null,
       });
     }
 

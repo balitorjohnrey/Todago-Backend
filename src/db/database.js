@@ -42,8 +42,16 @@ async function initializeDatabase() {
         valid_id_image_url TEXT,
         face_verification_image_url TEXT,
         identity_verification_status TEXT DEFAULT 'not_submitted',
+        identity_provider TEXT DEFAULT 'manual',
+        identity_is_verified BOOLEAN DEFAULT false,
         identity_submitted_at TIMESTAMPTZ,
         identity_verified_at TIMESTAMPTZ,
+        persona_inquiry_id TEXT,
+        persona_account_id TEXT,
+        persona_reference_id TEXT,
+        persona_status TEXT,
+        persona_last_event TEXT,
+        persona_last_event_at TIMESTAMPTZ,
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
@@ -75,10 +83,34 @@ async function initializeDatabase() {
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`
     );
     await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_provider TEXT DEFAULT 'manual'`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_is_verified BOOLEAN DEFAULT false`
+    );
+    await client.query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`
     );
     await client.query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_inquiry_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_account_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_reference_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_status TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_last_event TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`
     );
 
     // ── COMMUTERS (kept for backward compat — legacy table) ───────────────────
@@ -137,8 +169,16 @@ async function initializeDatabase() {
         valid_id_image_url TEXT,
         face_verification_image_url TEXT,
         identity_verification_status TEXT DEFAULT 'not_submitted',
+        identity_provider TEXT DEFAULT 'manual',
+        identity_is_verified BOOLEAN DEFAULT false,
         identity_submitted_at TIMESTAMPTZ,
         identity_verified_at TIMESTAMPTZ,
+        persona_inquiry_id TEXT,
+        persona_account_id TEXT,
+        persona_reference_id TEXT,
+        persona_status TEXT,
+        persona_last_event TEXT,
+        persona_last_event_at TIMESTAMPTZ,
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
@@ -167,10 +207,34 @@ async function initializeDatabase() {
       `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`
     );
     await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_provider TEXT DEFAULT 'manual'`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_is_verified BOOLEAN DEFAULT false`
+    );
+    await client.query(
       `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`
     );
     await client.query(
       `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_inquiry_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_account_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_reference_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_status TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_last_event TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`
     );
 
     // ── DRIVERS ───────────────────────────────────────────────────────────────
@@ -201,8 +265,16 @@ async function initializeDatabase() {
         valid_id_image_url TEXT,
         face_verification_image_url TEXT,
         identity_verification_status TEXT DEFAULT 'not_submitted',
+        identity_provider TEXT DEFAULT 'manual',
+        identity_is_verified BOOLEAN DEFAULT false,
         identity_submitted_at TIMESTAMPTZ,
         identity_verified_at TIMESTAMPTZ,
+        persona_inquiry_id TEXT,
+        persona_account_id TEXT,
+        persona_reference_id TEXT,
+        persona_status TEXT,
+        persona_last_event TEXT,
+        persona_last_event_at TIMESTAMPTZ,
         created_at       TIMESTAMPTZ DEFAULT NOW(),
         updated_at       TIMESTAMPTZ DEFAULT NOW(),
         last_login       TIMESTAMPTZ
@@ -247,10 +319,34 @@ async function initializeDatabase() {
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`
     );
     await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_provider TEXT DEFAULT 'manual'`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_is_verified BOOLEAN DEFAULT false`
+    );
+    await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`
     );
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_inquiry_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_account_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_reference_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_status TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_last_event TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`
     );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────
@@ -760,16 +856,25 @@ async function initializeDatabase() {
       `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`
     );
     await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_users_persona_inquiry ON users(persona_inquiry_id)`
+    );
+    await client.query(
       `CREATE INDEX IF NOT EXISTS idx_commuters_email ON commuters(email)`
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_drivers_email ON drivers(email)`
     );
     await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_drivers_persona_inquiry ON drivers(persona_inquiry_id)`
+    );
+    await client.query(
       `CREATE INDEX IF NOT EXISTS idx_drivers_body ON drivers(toda_body_number)`
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_operators_email ON operators(email)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_operators_persona_inquiry ON operators(persona_inquiry_id)`
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_trips_driver ON trips(driver_id)`

@@ -1,17 +1,11 @@
 /**
  * Operator Auth Routes
  *
- * FIX SUMMARY:
- * - Register now requires the main account JWT (Authorization: Bearer <token>)
- *   instead of looking up by email in a separate "commuters" table.
- *   The backend reads the user's data (name, phone, email, password_hash, salt)
- *   directly from the `users` table using req.userId set by requireAuth.
- *   This eliminates the "No account found" error and auto-fills all personal info.
+ * Operator registration is separate from passenger accounts. An operator signs
+ * up with association details, contact details, password, valid ID proof, and
+ * a face verification image.
  *
- * - Login uses the same password as the main account (password_hash + salt
- *   copied from users at registration time).
- *
- * - LOGIN FIX: The WHERE clause now also matches against association_name
+ * LOGIN: The WHERE clause matches against association_name
  *   (case-insensitive), so users can enter either the short association code
  *   OR the full association name (e.g. "Panabo City TODA") in the login field.
  */
@@ -25,10 +19,16 @@ const {
   clampInt: clampPeakInt,
   getPeakHourAnalysis,
 } = require('../utils/peakHourAnalytics');
-const { generateSalt, hashPassword, verifyPasswordDetailed } = require('../utils/password');
-
-// ── FIX: requireAuth is now properly exported from auth.js ────────────────────
-const { requireAuth } = require('./auth');
+const {
+  generateSalt,
+  hashPassword,
+  verifyPasswordDetailed,
+  validatePasswordStrength,
+} = require('../utils/password');
+const {
+  pickIdentityPayload,
+  validateIdentityPayload,
+} = require('../utils/identityVerification');
 
 const router = express.Router();
 
@@ -41,7 +41,14 @@ function generateOperatorToken(operatorId) {
 }
 
 function sanitizeOperator(op) {
-  const { password_hash, salt, ...safe } = op;
+  const {
+    password_hash,
+    salt,
+    valid_id_number,
+    valid_id_image_url,
+    face_verification_image_url,
+    ...safe
+  } = op;
   return safe;
 }
 
@@ -51,10 +58,9 @@ function clientIp(req) {
 }
 
 // ── POST /api/operator/register ───────────────────────────────────────────────
-// Requires main account JWT in Authorization header.
-// Contact info (name, phone, email) is pulled from the users table automatically.
+// Separate operator signup. Requires association details, contact details,
+// password, valid ID proof, and a face verification image.
 router.post('/register',
-  requireAuth, // ← verifies main account token, sets req.userId
   [
     body('associationName').trim().isLength({ min: 2 })
       .withMessage('Association name is required'),
@@ -64,6 +70,14 @@ router.post('/register',
       .withMessage('LTFRB franchise number is required'),
     body('region').trim().notEmpty()
       .withMessage('Region/city is required'),
+    body('contactName').trim().isLength({ min: 2, max: 100 })
+      .withMessage('Contact person name must be 2–100 characters'),
+    body('email').trim().isEmail().normalizeEmail()
+      .withMessage('Enter a valid email address'),
+    body('phone').trim().matches(/^[+\d\s\-()]{7,20}$/)
+      .withMessage('Enter a valid phone number'),
+    body('password').isLength({ min: 8, max: 128 })
+      .withMessage('Password must be 8–128 characters'),
     body('serviceArea').optional().trim(),
     body('totalTricycles').optional(),
   ],
@@ -75,38 +89,27 @@ router.post('/register',
 
     const {
       associationName, associationCode, ltfrbNumber,
-      region, serviceArea, totalTricycles,
+      region, contactName, email, phone, password,
+      serviceArea, totalTricycles,
     } = req.body;
+    const identityError = validateIdentityPayload(req.body);
+    if (identityError) {
+      return res.status(422).json({ success: false, message: identityError });
+    }
+    const identity = pickIdentityPayload(req.body);
 
     try {
-      // ── FIX: Look up the main account from `users` table using req.userId ──
-      // No more commuters table, no more email/phone mismatches.
-      const mainUser = await dbGet(
-        `SELECT * FROM users WHERE id = $1 AND is_active IS NOT FALSE`,
-        [req.userId]
-      );
-
-      if (!mainUser) {
-        return res.status(404).json({
-          success: false,
-          message: 'Main account not found. Please sign in to your TodaGo account first.',
-        });
-      }
-
-      // Check if this user already has an operator account
-      const existingOperator = await dbGet(
-        'SELECT operator_id FROM operators WHERE user_id = $1',
-        [mainUser.id]
-      );
-      if (existingOperator) {
-        return res.status(409).json({
-          success: false,
-          message: 'This account already has an operator profile.',
-        });
+      const strengthErrors = validatePasswordStrength(password);
+      if (strengthErrors.length > 0) {
+        return res.status(400).json({ success: false, message: strengthErrors[0] });
       }
 
       // Duplicate checks for association details
       const checks = [
+        ['SELECT operator_id FROM operators WHERE email = $1',
+         [email.toLowerCase()], 'An operator account with this email already exists'],
+        ['SELECT operator_id FROM operators WHERE phone = $1',
+         [phone.trim()], 'An operator account with this phone number already exists'],
         ['SELECT toda_id FROM toda_associations WHERE ltfrb_number = $1',
          [ltfrbNumber], 'LTFRB number already registered'],
         ['SELECT toda_id FROM toda_associations WHERE association_code = $1',
@@ -136,23 +139,31 @@ router.post('/register',
         ]
       );
 
-      // Create operator — personal info and password come from the main users record
+      const salt = generateSalt();
+      const passwordHash = await hashPassword(password, salt);
+
       const operatorId = uuidv4();
       await dbRun(
         `INSERT INTO operators
           (operator_id, user_id, toda_id, contact_name, email, phone,
-           password_hash, salt, toda_body_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+           password_hash, salt, toda_body_id, valid_id_type, valid_id_number,
+           valid_id_image_url, face_verification_image_url,
+           identity_verification_status, identity_submitted_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'submitted',NOW())`,
         [
           operatorId,
-          mainUser.id,
+          null,
           todaId,
-          mainUser.full_name,
-          mainUser.email,
-          mainUser.phone,
-          mainUser.password_hash,
-          mainUser.salt,
+          contactName.trim(),
+          email.toLowerCase(),
+          phone.trim(),
+          passwordHash,
+          salt,
           associationCode.trim(),
+          identity.validIdType,
+          identity.validIdNumber,
+          identity.validIdImageUrl,
+          identity.faceImageUrl,
         ]
       );
 
@@ -166,13 +177,12 @@ router.post('/register',
         [operatorId]
       );
 
-      const token = generateOperatorToken(operatorId);
-      console.log(`[Operator] Registered: ${associationName} — ${mainUser.email}`);
+      console.log(`[Operator] Registered: ${associationName} — ${email}`);
 
       return res.status(201).json({
         success: true,
         message: 'Operator account created! Pending LTFRB verification.',
-        token,
+        token: null,
         operator: sanitizeOperator(operator),
       });
 
@@ -184,7 +194,7 @@ router.post('/register',
 );
 
 // ── POST /api/operator/login ──────────────────────────────────────────────────
-// Login: TODA Association ID (full name OR code) + email + main account password
+// Login: TODA Association ID (full name OR code) + email + operator password
 //
 // FIX: The WHERE clause now matches on association_name OR association_code
 // (both case-insensitive), so users can type either value in the login field.
@@ -239,20 +249,11 @@ router.post('/login', [
       if (passwordResult.legacy && passwordResult.match) {
         const newSalt = generateSalt();
         const newHash = await hashPassword(password, newSalt);
-        const normalizedEmail = email.toLowerCase();
 
         await dbRun(
           'UPDATE operators SET password_hash = $1, salt = $2, updated_at = NOW() WHERE operator_id = $3',
           [newHash, newSalt, operator.operator_id]
         );
-        await dbRun(
-          'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3 OR email = $4',
-          [newHash, newSalt, operator.user_id || null, normalizedEmail]
-        ).catch(() => {});
-        await dbRun(
-          'UPDATE drivers SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
-          [newHash, newSalt, operator.user_id || null, normalizedEmail]
-        ).catch(() => {});
 
         operator.password_hash = newHash;
         operator.salt = newSalt;

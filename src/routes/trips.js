@@ -7,10 +7,15 @@ const jwt     = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
+const {
+  createCheckoutSession,
+  verifyWebhookSignature,
+} = require('../services/paymongo');
 
 const router = express.Router();
 const TRICYCLE_AVERAGE_SPEED_KMH = 19.94;
 const DRIVER_LOCATION_FRESHNESS_MINUTES = 5;
+const ONLINE_PAYMENT_METHODS = ['gcash', 'maya', 'wallet'];
 
 function haversineKm(aLat, aLng, bLat, bLng) {
   const toRad = (value) => value * Math.PI / 180;
@@ -66,6 +71,54 @@ function parseDropoffs(value) {
   } catch {
     return [];
   }
+}
+
+function normalizePaymentMethod(value) {
+  const method = (value || '').toString().toLowerCase();
+  return ['cash', 'gcash', 'maya', 'wallet'].includes(method) ? method : 'cash';
+}
+
+function formatPaymentMethod(value) {
+  switch (normalizePaymentMethod(value)) {
+    case 'gcash':
+      return 'GCash';
+    case 'maya':
+      return 'Maya';
+    case 'wallet':
+      return 'TodaGo Payment';
+    default:
+      return 'Cash';
+  }
+}
+
+async function finalizeTripPayment(trip, driverId) {
+  await dbRun(
+    `UPDATE trips
+     SET status = 'completed',
+         end_timestamp = COALESCE(end_timestamp, NOW()),
+         payment_status = 'paid',
+         payment_collected_at = COALESCE(payment_collected_at, NOW())
+     WHERE trip_id = $1`,
+    [trip.trip_id]
+  );
+
+  if (trip.status !== 'completed') {
+    await dbRun(
+      `UPDATE drivers
+       SET total_trips = total_trips + 1,
+           status      = 'online',
+           online_since = COALESCE(online_since, NOW()),
+           updated_at  = NOW()
+       WHERE driver_id = $1`,
+      [driverId || trip.driver_id]
+    );
+  }
+
+  const grossFare = parseFloat(trip.fare) || 0;
+  return {
+    gross_fare: grossFare,
+    your_earnings: grossFare,
+  };
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -152,6 +205,73 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[Trips] Online drivers error:', err.message);
     return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.get('/paymongo/return', (req, res) => {
+  const status = req.query.status === 'success' ? 'successful' : 'cancelled';
+  res
+    .status(200)
+    .type('html')
+    .send(`<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>TodaGo Payment</title></head>
+<body style="font-family:Arial,sans-serif;padding:28px;line-height:1.45">
+<h1>TodaGo payment ${status}</h1>
+<p>You can return to the TodaGo app. Your trip screen will update once payment is confirmed.</p>
+</body></html>`);
+});
+
+router.post('/paymongo/webhook', async (req, res) => {
+  try {
+    const root = req.body?.data;
+    const livemode = root?.livemode ?? root?.attributes?.livemode ?? false;
+    const signature = req.get('Paymongo-Signature') || req.get('X-Paymongo-Signature');
+    if (!verifyWebhookSignature({
+      rawBody: req.rawBody,
+      signatureHeader: signature,
+      livemode,
+    })) {
+      return res.status(401).json({ success: false, message: 'Invalid webhook signature' });
+    }
+
+    const eventType = root?.type === 'event'
+      ? root?.attributes?.type
+      : (root?.type || root?.attributes?.type);
+    if (eventType !== 'checkout_session.payment.paid') {
+      return res.status(200).json({ success: true, ignored: true });
+    }
+
+    const session = root?.data || root?.attributes?.data;
+    const attrs = session?.attributes || {};
+    const tripId = attrs.reference_number || attrs.metadata?.trip_id;
+    const payment = attrs.payment_intent?.attributes?.payments?.[0] ||
+      attrs.payments?.[0] ||
+      null;
+
+    if (!tripId && !session?.id) {
+      return res.status(200).json({ success: true, ignored: true });
+    }
+
+    await dbRun(
+      `UPDATE trips
+       SET payment_status = 'paid',
+           paymongo_checkout_session_id = COALESCE(paymongo_checkout_session_id, $1),
+           paymongo_payment_id = COALESCE($2, paymongo_payment_id),
+           paymongo_paid_at = NOW(),
+           payment_reference = COALESCE($3, payment_reference)
+       WHERE trip_id = $4 OR paymongo_checkout_session_id = $1`,
+      [
+        session?.id || null,
+        payment?.id || null,
+        payment?.id || session?.id || null,
+        tripId || null,
+      ]
+    );
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('[PayMongo] Webhook error:', err.message);
+    return res.status(200).json({ success: false });
   }
 });
 
@@ -526,10 +646,209 @@ router.put('/:tripId/decline', requireAuth, async (req, res) => {
   }
 });
 
+router.put('/:tripId/payment-method', requireAuth, [
+  body('paymentMethod')
+    .isIn(['cash','gcash','maya','wallet'])
+    .withMessage('Invalid payment method'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+  try {
+    const trip = await dbGet(
+      `SELECT trip_id, commuter_id, status, payment_status
+       FROM trips
+       WHERE trip_id = $1`,
+      [req.params.tripId]
+    );
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    if (!['commuter', 'passenger'].includes(req.userRole) || trip.commuter_id !== req.userId) {
+      return res.status(403).json({ success: false, message: 'Only the passenger can change payment method' });
+    }
+    if (['completed', 'cancelled'].includes(trip.status) || trip.payment_status === 'paid') {
+      return res.status(409).json({ success: false, message: 'Payment method can no longer be changed' });
+    }
+
+    const paymentMethod = normalizePaymentMethod(req.body.paymentMethod);
+    await dbRun(
+      `UPDATE trips
+       SET payment_method = $1,
+           payment_status = 'unpaid',
+           paymongo_checkout_session_id = NULL,
+           paymongo_checkout_url = NULL
+       WHERE trip_id = $2`,
+      [paymentMethod, trip.trip_id]
+    );
+    const updated = await dbGet(`SELECT * FROM trips WHERE trip_id = $1`, [trip.trip_id]);
+    return res.json({
+      success: true,
+      message: `Payment method set to ${formatPaymentMethod(paymentMethod)}.`,
+      trip: updated,
+    });
+  } catch (err) {
+    console.error('[Trips] Payment method update error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.post('/:tripId/payment/checkout', requireAuth, [
+  body('paymentMethod')
+    .optional({ nullable: true })
+    .isIn(['gcash','maya','wallet'])
+    .withMessage('Invalid online payment method'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  }
+  try {
+    const trip = await dbGet(
+      `SELECT tr.*, u.full_name AS commuter_name, u.phone AS commuter_phone
+       FROM trips tr
+       LEFT JOIN users u ON u.id = tr.commuter_id
+       WHERE tr.trip_id = $1`,
+      [req.params.tripId]
+    );
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    if (!['commuter', 'passenger'].includes(req.userRole) || trip.commuter_id !== req.userId) {
+      return res.status(403).json({ success: false, message: 'Only the passenger can pay this trip' });
+    }
+    if (['completed', 'cancelled'].includes(trip.status)) {
+      return res.status(409).json({ success: false, message: `Trip is already ${trip.status}` });
+    }
+    if (trip.status !== 'arrived') {
+      return res.status(409).json({ success: false, message: 'Payment opens after the driver marks arrival at your destination' });
+    }
+    if (trip.payment_status === 'paid') {
+      return res.json({
+        success: true,
+        message: 'Payment already received.',
+        checkoutUrl: trip.paymongo_checkout_url,
+        trip,
+      });
+    }
+
+    const paymentMethod = normalizePaymentMethod(req.body.paymentMethod || trip.payment_method || 'wallet');
+    if (!ONLINE_PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(422).json({ success: false, message: 'Choose GCash, Maya, or TodaGo Payment for online checkout' });
+    }
+
+    const session = await createCheckoutSession({
+      tripId: trip.trip_id,
+      amount: trip.fare,
+      paymentMethod,
+      passengerName: trip.commuter_name,
+      passengerPhone: trip.commuter_phone,
+      description: `TodaGo ride to ${trip.destination || 'destination'}`,
+    });
+    const checkoutUrl = session.attributes?.checkout_url;
+
+    await dbRun(
+      `UPDATE trips
+       SET payment_method = $1,
+           payment_status = 'pending',
+           paymongo_checkout_session_id = $2,
+           paymongo_checkout_url = $3
+       WHERE trip_id = $4`,
+      [paymentMethod, session.id, checkoutUrl, trip.trip_id]
+    );
+    const updated = await dbGet(`SELECT * FROM trips WHERE trip_id = $1`, [trip.trip_id]);
+
+    return res.json({
+      success: true,
+      message: 'PayMongo checkout created.',
+      checkoutSessionId: session.id,
+      checkoutUrl,
+      trip: updated,
+    });
+  } catch (err) {
+    console.error('[PayMongo] Checkout error:', err.message);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.statusCode === 503
+        ? 'PayMongo is not configured yet. Add PAYMONGO_SECRET_KEY on the backend.'
+        : err.message || 'Unable to create checkout',
+    });
+  }
+});
+
+router.post('/:tripId/payment/collect', requireAuth, async (req, res) => {
+  if (req.userRole !== 'driver') {
+    return res.status(403).json({ success: false, message: 'Driver access only' });
+  }
+  try {
+    const trip = await dbGet(
+      `SELECT trip_id, commuter_id, driver_id, status, fare,
+              service_type, passenger_count, shared_dropoffs,
+              remaining_passenger_count, payment_method, payment_status
+       FROM trips
+       WHERE trip_id = $1`,
+      [req.params.tripId]
+    );
+    if (!trip || trip.driver_id !== req.userId) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    if (trip.status === 'cancelled') {
+      return res.status(409).json({ success: false, message: 'Trip is cancelled' });
+    }
+
+    const dropoffs = parseDropoffs(trip.shared_dropoffs);
+    const remaining = Number.parseInt(trip.remaining_passenger_count, 10);
+    if (
+      trip.service_type === 'shared' &&
+      dropoffs.length > 0 &&
+      Number.isFinite(remaining) &&
+      remaining > 0
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: `Drop the remaining ${remaining} passenger${remaining === 1 ? '' : 's'} before collecting payment.`,
+      });
+    }
+
+    if (trip.status !== 'arrived' && trip.status !== 'completed') {
+      return res.status(409).json({ success: false, message: 'Mark arrived at destination before collecting payment' });
+    }
+
+    if (trip.payment_method === 'cash') {
+      await dbRun(
+        `UPDATE trips
+         SET payment_status = 'paid',
+             payment_reference = COALESCE(payment_reference, $1),
+             payment_collected_at = COALESCE(payment_collected_at, NOW())
+         WHERE trip_id = $2`,
+        [`cash:${trip.trip_id}`, trip.trip_id]
+      );
+      trip.payment_status = 'paid';
+    } else if (trip.payment_status !== 'paid') {
+      return res.status(409).json({
+        success: false,
+        message: `Waiting for ${formatPaymentMethod(trip.payment_method)} payment from passenger.`,
+        payment_status: trip.payment_status || 'unpaid',
+      });
+    }
+
+    const earnings = await finalizeTripPayment(trip, req.userId);
+    return res.json({
+      success: true,
+      message: 'Payment collected. Trip completed!',
+      earnings,
+    });
+  } catch (err) {
+    console.error('[Trips] Collect payment error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // ── PUT /api/trips/:tripId/status ─────────────────────────────────────────────
 router.put('/:tripId/status', requireAuth, [
   body('status')
-    .isIn(['pickup','ongoing','completed','cancelled'])
+    .isIn(['pickup','ongoing','arrived','completed','cancelled'])
     .withMessage('Invalid status'),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -542,8 +861,8 @@ router.put('/:tripId/status', requireAuth, [
   try {
     const trip = await dbGet(
       `SELECT trip_id, commuter_id, driver_id, status, fare,
-              service_type, passenger_count, shared_dropoffs,
-              remaining_passenger_count
+               service_type, passenger_count, shared_dropoffs,
+               remaining_passenger_count, payment_method, payment_status
        FROM trips
        WHERE trip_id = $1`,
       [req.params.tripId]
@@ -607,7 +926,11 @@ router.put('/:tripId/status', requireAuth, [
       return res.status(409).json({ success: false, message: `Trip is already ${trip.status}` });
     }
 
-    if (status === 'completed') {
+    if (status === 'arrived' && !['pickup', 'ongoing', 'accepted'].includes(trip.status)) {
+      return res.status(409).json({ success: false, message: `Trip cannot be marked arrived while ${trip.status}` });
+    }
+
+    if (status === 'completed' || status === 'arrived') {
       const dropoffs = parseDropoffs(trip.shared_dropoffs);
       const remaining = Number.parseInt(trip.remaining_passenger_count, 10);
       if (
@@ -618,15 +941,27 @@ router.put('/:tripId/status', requireAuth, [
       ) {
         return res.status(409).json({
           success: false,
-          message: `Drop the remaining ${remaining} passenger${remaining === 1 ? '' : 's'} before completing this shared trip.`,
+          message: `Drop the remaining ${remaining} passenger${remaining === 1 ? '' : 's'} before ${status === 'arrived' ? 'marking arrived' : 'completing this shared trip'}.`,
         });
       }
+    }
+
+    if (
+      status === 'completed' &&
+      ONLINE_PAYMENT_METHODS.includes(trip.payment_method) &&
+      trip.payment_status !== 'paid'
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: `Waiting for ${formatPaymentMethod(trip.payment_method)} payment from passenger.`,
+        payment_status: trip.payment_status || 'unpaid',
+      });
     }
 
     await dbRun(
       `UPDATE trips
        SET status = $1
-           ${status === 'completed' ? ', end_timestamp = NOW()' : ''}
+           ${status === 'completed' ? ", end_timestamp = NOW(), payment_status = CASE WHEN payment_method = 'cash' THEN 'paid' ELSE payment_status END, payment_collected_at = CASE WHEN payment_method = 'cash' THEN COALESCE(payment_collected_at, NOW()) ELSE payment_collected_at END" : ''}
        WHERE trip_id = $2`,
       [status, req.params.tripId]
     );
@@ -682,7 +1017,7 @@ router.post('/:tripId/dropoff', requireAuth, async (req, res) => {
        FROM trips
        WHERE trip_id = $1
          AND driver_id = $2
-         AND status IN ('accepted','pickup','ongoing')`,
+         AND status IN ('accepted','pickup','ongoing','arrived')`,
       [req.params.tripId, req.userId]
     );
 
@@ -774,7 +1109,7 @@ router.put('/:tripId/driver-location', requireAuth, [
       return res.status(404).json({ success: false, message: 'Trip not found' });
     }
 
-    if (!['accepted','pickup','ongoing'].includes(trip.status)) {
+    if (!['accepted','pickup','ongoing','arrived'].includes(trip.status)) {
       return res.status(409).json({
         success: false,
         message: `Driver location cannot be updated while trip is ${trip.status}`,
@@ -822,7 +1157,7 @@ router.get('/commuter/active', requireAuth, async (req, res) => {
        LEFT JOIN tricycles  t ON t.driver_id  = d.driver_id
        WHERE tr.commuter_id = $1
          AND (
-           tr.status IN ('requested','accepted','pickup','ongoing')
+            tr.status IN ('requested','accepted','pickup','ongoing','arrived')
            OR (tr.status = 'completed' AND tr.end_timestamp > NOW() - INTERVAL '5 minutes')
          )
        ORDER BY tr.request_timestamp DESC
@@ -850,7 +1185,7 @@ router.get('/driver/active', requireAuth, async (req, res) => {
        FROM trips tr
        LEFT JOIN users u ON u.id = tr.commuter_id
        WHERE tr.driver_id = $1
-         AND tr.status IN ('accepted','pickup','ongoing')
+          AND tr.status IN ('accepted','pickup','ongoing','arrived')
        ORDER BY tr.request_timestamp DESC
        LIMIT 1`,
       [req.userId]

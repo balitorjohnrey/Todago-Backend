@@ -24,7 +24,7 @@ async function initializeDatabase() {
   try {
     await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
 
-    // ── USERS (main account — used by auth.js) ────────────────────────────────
+    // ── USERS (passenger accounts — used by auth.js) ─────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -37,6 +37,13 @@ async function initializeDatabase() {
         is_verified   BOOLEAN DEFAULT false,
         is_active     BOOLEAN DEFAULT true,
         profile_photo_url TEXT,
+        valid_id_type TEXT,
+        valid_id_number TEXT,
+        valid_id_image_url TEXT,
+        face_verification_image_url TEXT,
+        identity_verification_status TEXT DEFAULT 'not_submitted',
+        identity_submitted_at TIMESTAMPTZ,
+        identity_verified_at TIMESTAMPTZ,
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
@@ -51,6 +58,27 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_id_type TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_id_number TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_id_image_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS face_verification_image_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`
     );
 
     // ── COMMUTERS (kept for backward compat — legacy table) ───────────────────
@@ -104,6 +132,13 @@ async function initializeDatabase() {
         is_verified   BOOLEAN DEFAULT false,
         is_active     BOOLEAN DEFAULT true,
         role          TEXT DEFAULT 'operator',
+        valid_id_type TEXT,
+        valid_id_number TEXT,
+        valid_id_image_url TEXT,
+        face_verification_image_url TEXT,
+        identity_verification_status TEXT DEFAULT 'not_submitted',
+        identity_submitted_at TIMESTAMPTZ,
+        identity_verified_at TIMESTAMPTZ,
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW(),
         last_login    TIMESTAMPTZ
@@ -115,6 +150,27 @@ async function initializeDatabase() {
     // Link operators back to users table
     await client.query(
       `ALTER TABLE operators ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id)`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_type TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_number TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_image_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS face_verification_image_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`
     );
 
     // ── DRIVERS ───────────────────────────────────────────────────────────────
@@ -140,6 +196,13 @@ async function initializeDatabase() {
         is_active        BOOLEAN DEFAULT true,
         profile_photo_url TEXT,
         role             TEXT DEFAULT 'driver',
+        valid_id_type TEXT,
+        valid_id_number TEXT,
+        valid_id_image_url TEXT,
+        face_verification_image_url TEXT,
+        identity_verification_status TEXT DEFAULT 'not_submitted',
+        identity_submitted_at TIMESTAMPTZ,
+        identity_verified_at TIMESTAMPTZ,
         created_at       TIMESTAMPTZ DEFAULT NOW(),
         updated_at       TIMESTAMPTZ DEFAULT NOW(),
         last_login       TIMESTAMPTZ
@@ -167,6 +230,27 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_type TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_number TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_image_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS face_verification_image_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`
     );
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────
@@ -283,10 +367,18 @@ async function initializeDatabase() {
         remaining_passenger_count INT,
         payment_method    TEXT DEFAULT 'cash'
                             CHECK (payment_method IN ('cash','gcash','maya','wallet')),
+        payment_status    TEXT DEFAULT 'unpaid'
+                            CHECK (payment_status IN ('unpaid','pending','paid','failed')),
+        payment_reference TEXT,
+        payment_collected_at TIMESTAMPTZ,
+        paymongo_checkout_session_id TEXT,
+        paymongo_checkout_url TEXT,
+        paymongo_payment_id TEXT,
+        paymongo_paid_at TIMESTAMPTZ,
         wait_time_seconds INT DEFAULT 0,
         avg_speed_kmh     FLOAT DEFAULT 0,
         status            TEXT DEFAULT 'requested'
-                            CHECK (status IN ('scheduled','requested','accepted','pickup','ongoing','completed','cancelled')),
+                            CHECK (status IN ('scheduled','requested','accepted','pickup','ongoing','arrived','completed','cancelled')),
         trip_type         TEXT DEFAULT 'instant'
                             CHECK (trip_type IN ('instant','scheduled')),
         scheduled_pickup_at TIMESTAMPTZ,
@@ -370,6 +462,30 @@ async function initializeDatabase() {
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS remaining_passenger_count INT`
     );
     await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'unpaid'`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS payment_reference TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS payment_collected_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS paymongo_checkout_session_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS paymongo_checkout_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS paymongo_payment_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD COLUMN IF NOT EXISTS paymongo_paid_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `UPDATE trips SET payment_status = 'unpaid' WHERE payment_status IS NULL`
+    );
+    await client.query(
       `UPDATE trips SET passenger_count = 1 WHERE passenger_count IS NULL`
     );
     await client.query(
@@ -403,11 +519,29 @@ async function initializeDatabase() {
     );
     await client.query(
       `ALTER TABLE trips ADD CONSTRAINT trips_status_check
-       CHECK (status IN ('scheduled','requested','accepted','pickup','ongoing','completed','cancelled'))`
+       CHECK (status IN ('scheduled','requested','accepted','pickup','ongoing','arrived','completed','cancelled'))`
+    );
+    await client.query(
+      `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_payment_method_check`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD CONSTRAINT trips_payment_method_check
+       CHECK (payment_method IN ('cash','gcash','maya','wallet'))`
+    );
+    await client.query(
+      `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_payment_status_check`
+    );
+    await client.query(
+      `ALTER TABLE trips ADD CONSTRAINT trips_payment_status_check
+       CHECK (payment_status IN ('unpaid','pending','paid','failed'))`
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_trips_scheduled_pickup
        ON trips(scheduled_pickup_at)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_trips_paymongo_session
+       ON trips(paymongo_checkout_session_id)`
     );
 
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────

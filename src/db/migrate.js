@@ -38,13 +38,34 @@ router.post('/fix', async (req, res) => {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_id_type TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_id_number TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_id_image_url TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS face_verification_image_url TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_type TEXT`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_number TEXT`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_image_url TEXT`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS face_verification_image_url TEXT`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_type TEXT`);
+    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_number TEXT`);
+    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_image_url TEXT`);
+    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS face_verification_image_url TEXT`);
+    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_verification_status TEXT DEFAULT 'not_submitted'`);
+    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_submitted_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)`);
-    results.push('users table columns ensured');
+    results.push('identity verification columns ensured');
 
     // 4. Ensure login_attempts has columns
-    await client.query(`ALTER TABLE login_attempts ADD COLUMN IF NOT EXISTS user_type TEXT DEFAULT 'commuter'`);
+    await client.query(`ALTER TABLE login_attempts ADD COLUMN IF NOT EXISTS user_type TEXT DEFAULT 'passenger'`);
     await client.query(`ALTER TABLE login_attempts ADD COLUMN IF NOT EXISTS ip_address TEXT`);
     await client.query(`ALTER TABLE login_attempts ADD COLUMN IF NOT EXISTS success BOOLEAN DEFAULT false`);
     results.push('login_attempts columns ensured');

@@ -1,15 +1,9 @@
 /**
  * Driver Auth Routes
  *
- * FIX SUMMARY:
- * - Register now requires the main account JWT (Authorization: Bearer <token>)
- *   instead of looking up by phone in a separate "commuters" table.
- *   The backend reads the user's data (name, phone, email, password_hash, salt)
- *   directly from the `users` table using req.userId set by requireAuth.
- *   This eliminates the "No account found" error and auto-fills all personal info.
- *
- * - Login uses the same password as the main account (password_hash + salt
- *   copied from users at registration time).
+ * Driver registration is separate from passenger accounts. A driver signs up
+ * with driver personal details, vehicle details, password, valid ID proof, and
+ * a face verification image.
  */
 const express = require('express');
 const { body, validationResult } = require('express-validator');
@@ -17,11 +11,17 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { clampInt, getPeakHourAnalysis } = require('../utils/peakHourAnalytics');
-const { generateSalt, hashPassword, verifyPasswordDetailed } = require('../utils/password');
+const {
+  generateSalt,
+  hashPassword,
+  verifyPasswordDetailed,
+  validatePasswordStrength,
+} = require('../utils/password');
 const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
-
-// ── FIX: requireAuth is now properly exported from auth.js ────────────────────
-const { requireAuth } = require('./auth');
+const {
+  pickIdentityPayload,
+  validateIdentityPayload,
+} = require('../utils/identityVerification');
 
 const router = express.Router();
 
@@ -34,7 +34,14 @@ function generateDriverToken(driverId) {
 }
 
 function sanitizeDriver(d) {
-  const { password_hash, salt, ...safe } = d;
+  const {
+    password_hash,
+    salt,
+    valid_id_number,
+    valid_id_image_url,
+    face_verification_image_url,
+    ...safe
+  } = d;
   return safe;
 }
 
@@ -214,12 +221,18 @@ router.get('/toda-associations', async (req, res) => {
 });
 
 // ── POST /api/driver/register ─────────────────────────────────────────────────
-// Requires main account JWT in Authorization header.
-// Personal info (name, phone, email) is pulled from the users table automatically
-// — the Flutter app does NOT need to send them; they're auto-filled from the token.
+// Separate driver signup. Requires personal details, a driver password, valid ID
+// proof, and a face verification image.
 router.post('/register',
-  requireAuth, // ← verifies main account token, sets req.userId
   [
+    body('fullName').trim().isLength({ min: 2, max: 100 })
+      .withMessage('Full name must be 2–100 characters'),
+    body('email').trim().isEmail().normalizeEmail()
+      .withMessage('Enter a valid email address'),
+    body('phone').trim().matches(/^[+\d\s\-()]{7,20}$/)
+      .withMessage('Enter a valid phone number'),
+    body('password').isLength({ min: 8, max: 128 })
+      .withMessage('Password must be 8–128 characters'),
     body('licenseNo')
       .trim()
       .notEmpty().withMessage('License number is required')
@@ -239,6 +252,10 @@ router.post('/register',
     }
 
     const {
+      fullName,
+      email,
+      phone,
+      password,
       licenseNo,
       todaBodyNumber,
       plateNo,
@@ -251,38 +268,22 @@ router.post('/register',
     const normalizedPlateNo = normalizePlate(plateNo);
     const normalizedDriverType = normalizeDriverType(driverType);
     const associationIdentifier = String(todaId || todaAssociation || '').trim();
+    const identityError = validateIdentityPayload(req.body);
+    if (identityError) {
+      return res.status(422).json({ success: false, message: identityError });
+    }
+    const identity = pickIdentityPayload(req.body);
 
     try {
+      const strengthErrors = validatePasswordStrength(password);
+      if (strengthErrors.length > 0) {
+        return res.status(400).json({ success: false, message: strengthErrors[0] });
+      }
+
       if (normalizedDriverType === 'associated' && !associationIdentifier) {
         return res.status(422).json({
           success: false,
           message: 'TODA Association Name or Code is required for associated drivers.',
-        });
-      }
-
-      // ── FIX: Look up the main account from `users` table using req.userId ──
-      // No more commuters table, no more phone number mismatches.
-      const mainUser = await dbGet(
-        `SELECT * FROM users WHERE id = $1 AND is_active IS NOT FALSE`,
-        [req.userId]
-      );
-
-      if (!mainUser) {
-        return res.status(404).json({
-          success: false,
-          message: 'Main account not found. Please sign in to your TodaGo account first.',
-        });
-      }
-
-      // Check if this user already has a driver account
-      const existingDriver = await dbGet(
-        'SELECT driver_id FROM drivers WHERE user_id = $1',
-        [mainUser.id]
-      );
-      if (existingDriver) {
-        return res.status(409).json({
-          success: false,
-          message: 'This account already has a driver profile.',
         });
       }
 
@@ -299,6 +300,10 @@ router.post('/register',
 
       // Duplicate checks for vehicle details
       const checks = [
+        ['SELECT driver_id FROM drivers WHERE email = $1',
+         [email.toLowerCase()], 'A driver account with this email already exists'],
+        ['SELECT driver_id FROM drivers WHERE phone = $1',
+         [phone.trim()], 'A driver account with this phone number already exists'],
         ['SELECT driver_id FROM drivers WHERE license_no = $1',
          [normalizedLicenseNo], 'License number already registered'],
         ['SELECT driver_id FROM drivers WHERE toda_body_number = $1',
@@ -313,28 +318,37 @@ router.post('/register',
         }
       }
 
+      const salt = generateSalt();
+      const passwordHash = await hashPassword(password, salt);
       const driverId = uuidv4();
 
-      // Insert driver — personal info and password come from the main users record
       await dbRun(
         `INSERT INTO drivers
           (driver_id, user_id, toda_id, toda_branch_name, driver_name, email, phone,
-           license_no, toda_body_number, password_hash, salt, profile_photo_url, status, is_verified)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'offline',$13)`,
+           license_no, toda_body_number, password_hash, salt, profile_photo_url,
+           status, is_verified, valid_id_type, valid_id_number, valid_id_image_url,
+           face_verification_image_url, identity_verification_status,
+           identity_submitted_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'offline',$13,
+                 $14,$15,$16,$17,'submitted',NOW())`,
         [
           driverId,
-          mainUser.id,
+          null,
           association?.toda_id || null,
           association?.association_name || null,
-          mainUser.full_name,
-          mainUser.email,
-          mainUser.phone,
+          fullName.trim(),
+          email.toLowerCase(),
+          phone.trim(),
           normalizedLicenseNo,
           todaBodyNumber.trim(),
-          mainUser.password_hash,
-          mainUser.salt,
-          mainUser.profile_photo_url || null,
+          passwordHash,
+          salt,
+          null,
           false,
+          identity.validIdType,
+          identity.validIdNumber,
+          identity.validIdImageUrl,
+          identity.faceImageUrl,
         ]
       );
 
@@ -364,7 +378,7 @@ router.post('/register',
         [driverId]
       );
 
-      console.log(`[Driver] Registered: ${mainUser.full_name} (${driverId})`);
+      console.log(`[Driver] Registered: ${fullName} (${driverId})`);
 
       return res.status(201).json({
         success: true,
@@ -387,8 +401,8 @@ router.post('/register',
 
 // ── POST /api/driver/login ────────────────────────────────────────────────────
 // Login:
-// - Independent drivers use license number + password.
-// - Associated drivers use TODA Association Name/Code + license number + password.
+// - Independent drivers use license number + driver password.
+// - Associated drivers use TODA Association Name/Code + license number + driver password.
 // Legacy body-number + plate-number login remains accepted for older app builds.
 router.post('/login', [
   body('driverType').optional().trim(),
@@ -498,20 +512,11 @@ router.post('/login', [
       if (passwordResult.legacy && passwordResult.match) {
         const newSalt = generateSalt();
         const newHash = await hashPassword(password, newSalt);
-        const email = String(driver.email || '').toLowerCase();
 
         await dbRun(
           'UPDATE drivers SET password_hash = $1, salt = $2, updated_at = NOW() WHERE driver_id = $3',
           [newHash, newSalt, driver.driver_id]
         );
-        await dbRun(
-          'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3 OR email = $4',
-          [newHash, newSalt, driver.user_id || null, email]
-        ).catch(() => {});
-        await dbRun(
-          'UPDATE operators SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
-          [newHash, newSalt, driver.user_id || null, email]
-        ).catch(() => {});
 
         driver.password_hash = newHash;
         driver.salt = newSalt;

@@ -8,7 +8,14 @@ const PORT = process.env.PORT || 3000;
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  verify: (req, res, buf) => {
+    if (req.originalUrl?.startsWith('/api/trips/paymongo/webhook')) {
+      req.rawBody = Buffer.from(buf);
+    }
+  },
+}));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ── Routes ────────────────────────────────────────────────────────────────────

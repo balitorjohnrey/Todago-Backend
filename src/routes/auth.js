@@ -7,12 +7,16 @@ const { dbRun, dbGet }                                        = require('../db/d
 const { generateSalt, hashPassword,
         verifyPasswordDetailed,
         validatePasswordStrength }                             = require('../utils/password');
+const {
+  pickIdentityPayload,
+  validateIdentityPayload,
+} = require('../utils/identityVerification');
 
 const router = express.Router();
 
 // ── Generate JWT ──────────────────────────────────────────────────────────────
 function generateToken(userId) {
-  return jwt.sign({ sub: userId, role: 'commuter' }, process.env.JWT_SECRET, {
+  return jwt.sign({ sub: userId, role: 'passenger' }, process.env.JWT_SECRET, {
     expiresIn : process.env.JWT_EXPIRES_IN || '7d',
     issuer    : 'todago-api',
     audience  : 'todago-app',
@@ -20,7 +24,14 @@ function generateToken(userId) {
 }
 
 function sanitizeUser(user) {
-  const { password_hash, salt, ...safe } = user;
+  const {
+    password_hash,
+    salt,
+    valid_id_number,
+    valid_id_image_url,
+    face_verification_image_url,
+    ...safe
+  } = user;
   return safe;
 }
 
@@ -50,6 +61,11 @@ router.post('/register', [
   }
 
   const { fullName, email, phone, password } = req.body;
+  const identityError = validateIdentityPayload(req.body);
+  if (identityError) {
+    return res.status(422).json({ success: false, message: identityError });
+  }
+  const identity = pickIdentityPayload(req.body);
 
   try {
     const strengthErrors = validatePasswordStrength(password);
@@ -72,9 +88,24 @@ router.post('/register', [
     const userId       = uuidv4();
 
     await dbRun(
-      `INSERT INTO users (id, full_name, email, phone, password_hash, salt)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [userId, fullName.trim(), email.toLowerCase(), phone.trim(), passwordHash, salt]
+      `INSERT INTO users
+        (id, full_name, email, phone, password_hash, salt,
+         valid_id_type, valid_id_number, valid_id_image_url,
+         face_verification_image_url, identity_verification_status,
+         identity_submitted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'submitted', NOW())`,
+      [
+        userId,
+        fullName.trim(),
+        email.toLowerCase(),
+        phone.trim(),
+        passwordHash,
+        salt,
+        identity.validIdType,
+        identity.validIdNumber,
+        identity.validIdImageUrl,
+        identity.faceImageUrl,
+      ]
     );
 
     const user  = await dbGet('SELECT * FROM users WHERE id = $1', [userId]);
@@ -84,7 +115,7 @@ router.post('/register', [
 
     return res.status(201).json({
       success : true,
-      message : 'Account created successfully',
+      message : 'Passenger account created. Identity proof submitted for verification.',
       token,
       user    : sanitizeUser(user),
     });
@@ -142,15 +173,6 @@ router.post('/login', [
             'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3',
             [newHash, newSalt, user.id]
           );
-          await dbRun(
-            'UPDATE drivers SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
-            [newHash, newSalt, user.id, email.toLowerCase()]
-          ).catch(() => {});
-          await dbRun(
-            'UPDATE operators SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
-            [newHash, newSalt, user.id, email.toLowerCase()]
-          ).catch(() => {});
-
           user.password_hash = newHash;
           user.salt = newSalt;
           console.log(`[Auth] Migrated legacy password hash for ${email}`);
@@ -171,7 +193,8 @@ router.post('/login', [
 
     if (!user || !passwordMatch) {
       await dbRun(
-        'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
+        `INSERT INTO login_attempts (user_type, email, ip_address, success)
+         VALUES ('passenger', $1, $2, $3)`,
         [email, ip, false]
       ).catch(() => {});
       if (passwordResetRequired) {
@@ -186,7 +209,8 @@ router.post('/login', [
 
     await dbRun('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id]);
     await dbRun(
-      'INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)',
+      `INSERT INTO login_attempts (user_type, email, ip_address, success)
+       VALUES ('passenger', $1, $2, $3)`,
       [email, ip, true]
     ).catch(() => {});
 
@@ -300,14 +324,6 @@ router.post('/fix-legacy-password', [
       'UPDATE users SET password_hash = $1, salt = $2, updated_at = NOW() WHERE id = $3',
       [newHash, newSalt, user.id]
     );
-    await dbRun(
-      'UPDATE drivers SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
-      [newHash, newSalt, user.id, email.toLowerCase()]
-    ).catch(() => {});
-    await dbRun(
-      'UPDATE operators SET password_hash = $1, salt = $2, updated_at = NOW() WHERE user_id = $3 OR email = $4',
-      [newHash, newSalt, user.id, email.toLowerCase()]
-    ).catch(() => {});
     console.log(`[Auth] Password fixed for legacy account: ${email}`);
     return res.json({ success: true, message: 'Password updated. You can now log in.' });
   } catch (error) {

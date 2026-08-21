@@ -640,6 +640,87 @@ async function initializeDatabase() {
        ON trips(paymongo_checkout_session_id)`
     );
 
+    // Passenger wallet ledger and linked payment accounts.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS linked_payment_accounts (
+        account_id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        user_id              TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        provider             TEXT NOT NULL
+                             CHECK (provider IN ('gcash','maya')),
+        account_name         TEXT,
+        masked_number        TEXT,
+        account_number_last4 TEXT,
+        status               TEXT DEFAULT 'linked'
+                             CHECK (status IN ('linked','unlinked')),
+        linked_at            TIMESTAMPTZ DEFAULT NOW(),
+        updated_at           TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, provider)
+      )
+    `);
+    await client.query(
+      `ALTER TABLE linked_payment_accounts ADD COLUMN IF NOT EXISTS account_name TEXT`
+    );
+    await client.query(
+      `ALTER TABLE linked_payment_accounts ADD COLUMN IF NOT EXISTS masked_number TEXT`
+    );
+    await client.query(
+      `ALTER TABLE linked_payment_accounts ADD COLUMN IF NOT EXISTS account_number_last4 TEXT`
+    );
+    await client.query(
+      `ALTER TABLE linked_payment_accounts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'linked'`
+    );
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        transaction_id      TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        trip_id             TEXT REFERENCES trips(trip_id) ON DELETE SET NULL,
+        type                TEXT NOT NULL
+                            CHECK (type IN ('topup','trip','cashout','send','reward','adjustment')),
+        provider            TEXT
+                            CHECK (provider IS NULL OR provider IN ('gcash','maya','wallet','cash','system')),
+        direction           TEXT NOT NULL
+                            CHECK (direction IN ('credit','debit')),
+        amount              NUMERIC(10,2) NOT NULL CHECK (amount >= 0),
+        status              TEXT DEFAULT 'pending'
+                            CHECK (status IN ('pending','completed','failed','cancelled')),
+        title               TEXT,
+        description         TEXT,
+        external_reference  TEXT,
+        checkout_session_id TEXT,
+        checkout_url        TEXT,
+        completed_at        TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(
+      `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS checkout_session_id TEXT`
+    );
+    await client.query(
+      `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS checkout_url TEXT`
+    );
+    await client.query(
+      `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_linked_payment_accounts_user
+       ON linked_payment_accounts(user_id, provider, status)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user_created
+       ON wallet_transactions(user_id, created_at DESC)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_transactions_checkout
+       ON wallet_transactions(checkout_session_id)`
+    );
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_transactions_trip_once
+       ON wallet_transactions(trip_id, type)
+       WHERE trip_id IS NOT NULL AND type = 'trip' AND status <> 'failed'`
+    );
+
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS gps_locations (

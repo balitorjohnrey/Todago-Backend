@@ -11,6 +11,10 @@ const {
   createCheckoutSession,
   verifyWebhookSignature,
 } = require('../services/paymongo');
+const {
+  completeWalletTopUp,
+  debitWalletForTrip,
+} = require('../services/walletLedger');
 
 const router = express.Router();
 const TRICYCLE_AVERAGE_SPEED_KMH = 19.94;
@@ -243,10 +247,20 @@ router.post('/paymongo/webhook', async (req, res) => {
 
     const session = root?.data || root?.attributes?.data;
     const attrs = session?.attributes || {};
+    const walletTransactionId = attrs.metadata?.wallet_transaction_id;
     const tripId = attrs.reference_number || attrs.metadata?.trip_id;
     const payment = attrs.payment_intent?.attributes?.payments?.[0] ||
       attrs.payments?.[0] ||
       null;
+
+    if (walletTransactionId || attrs.metadata?.payment_type === 'wallet_topup') {
+      await completeWalletTopUp({
+        transactionId: walletTransactionId || attrs.reference_number || null,
+        checkoutSessionId: session?.id || null,
+        paymentId: payment?.id || null,
+      });
+      return res.status(200).json({ success: true });
+    }
 
     if (!tripId && !session?.id) {
       return res.status(200).json({ success: true, ignored: true });
@@ -717,9 +731,11 @@ router.post('/:tripId/payment/checkout', requireAuth, [
   }
   try {
     const trip = await dbGet(
-      `SELECT tr.*, u.full_name AS commuter_name, u.phone AS commuter_phone
+      `SELECT tr.*, u.full_name AS commuter_name, u.phone AS commuter_phone,
+              d.driver_name
        FROM trips tr
        LEFT JOIN users u ON u.id = tr.commuter_id
+       LEFT JOIN drivers d ON d.driver_id = tr.driver_id
        WHERE tr.trip_id = $1`,
       [req.params.tripId]
     );
@@ -747,6 +763,23 @@ router.post('/:tripId/payment/checkout', requireAuth, [
     const paymentMethod = normalizePaymentMethod(req.body.paymentMethod || trip.payment_method || 'wallet');
     if (!ONLINE_PAYMENT_METHODS.includes(paymentMethod)) {
       return res.status(422).json({ success: false, message: 'Choose GCash, Maya, or TodaGo Payment for online checkout' });
+    }
+
+    if (paymentMethod === 'wallet') {
+      const walletPayment = await debitWalletForTrip(trip);
+      if (!walletPayment.success) {
+        return res.status(409).json(walletPayment);
+      }
+      const updated = await dbGet(`SELECT * FROM trips WHERE trip_id = $1`, [trip.trip_id]);
+      return res.json({
+        success: true,
+        message: 'Paid from TodaGo Wallet.',
+        trip: updated,
+        wallet: {
+          balance: walletPayment.balance,
+          transactionId: walletPayment.transactionId,
+        },
+      });
     }
 
     const session = await createCheckoutSession({

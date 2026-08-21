@@ -37,11 +37,17 @@ function paymongoMethodTypes(paymentMethod) {
 
 async function createCheckoutSession({
   tripId,
+  referenceId,
   amount,
   paymentMethod,
   passengerName,
   passengerPhone,
   description,
+  successUrl,
+  cancelUrl,
+  metadata = {},
+  lineItemName,
+  idempotencyKey,
 }) {
   const secretKey = getSecretKey();
   if (!secretKey) {
@@ -58,6 +64,7 @@ async function createCheckoutSession({
   }
 
   const publicBaseUrl = getPublicBaseUrl();
+  const referenceNumber = referenceId || tripId;
   const billing = {
     name: passengerName || 'TodaGo Passenger',
   };
@@ -68,25 +75,26 @@ async function createCheckoutSession({
       attributes: {
         line_items: [
           {
-            name: 'TodaGo ride fare',
+            name: lineItemName || 'TodaGo ride fare',
             amount: amountInCentavos,
             currency: 'PHP',
             quantity: 1,
-            description: description || `Trip ${tripId}`,
+            description: description || `TodaGo payment ${referenceNumber}`,
           },
         ],
         payment_method_types: paymongoMethodTypes(paymentMethod),
-        success_url: `${publicBaseUrl}/api/trips/paymongo/return?tripId=${encodeURIComponent(tripId)}&status=success`,
-        cancel_url: `${publicBaseUrl}/api/trips/paymongo/return?tripId=${encodeURIComponent(tripId)}&status=cancelled`,
-        reference_number: tripId,
+        success_url: successUrl || `${publicBaseUrl}/api/trips/paymongo/return?tripId=${encodeURIComponent(tripId)}&status=success`,
+        cancel_url: cancelUrl || `${publicBaseUrl}/api/trips/paymongo/return?tripId=${encodeURIComponent(tripId)}&status=cancelled`,
+        reference_number: referenceNumber,
         send_email_receipt: false,
         show_description: true,
         show_line_items: true,
-        description: description || `TodaGo trip ${tripId}`,
+        description: description || `TodaGo payment ${referenceNumber}`,
         metadata: {
           app: 'todago',
-          trip_id: tripId,
+          ...(tripId ? { trip_id: tripId } : {}),
           payment_method: paymentMethod || 'wallet',
+          ...metadata,
         },
         billing,
       },
@@ -99,7 +107,7 @@ async function createCheckoutSession({
       Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
-      'Idempotency-Key': `todago-trip-${tripId}-${paymentMethod || 'wallet'}`,
+      'Idempotency-Key': idempotencyKey || `todago-${referenceNumber}-${paymentMethod || 'wallet'}`,
     },
     body: JSON.stringify(body),
   });

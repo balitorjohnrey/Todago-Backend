@@ -13,6 +13,7 @@ app.use(express.json({
   verify: (req, res, buf, encoding) => {
     if (
       req.originalUrl?.startsWith('/api/trips/paymongo/webhook')
+      || req.originalUrl?.startsWith('/api/wallet/paymongo/webhook')
       || req.originalUrl?.startsWith('/api/kyc/persona/webhook')
     ) {
       req.rawBody = Buffer.from(buf || '', encoding || 'utf8');
@@ -28,6 +29,7 @@ const driverAuthRouter   = require('./routes/driver_auth');
 const operatorAuthRouter = require('./routes/operator_auth');
 const adminAuthRouter    = require('./routes/admin_auth');
 const tripsRouter        = require('./routes/trips');
+const walletRouter       = require('./routes/wallet');
 const subscriptionsRouter = require('./routes/subscriptions');
 const aiRouter = require('./routes/ai');
 const migrateRouter = require('./db/migrate');
@@ -41,6 +43,7 @@ app.use('/api/driver',        driverAuthRouter);
 app.use('/api/operator',      operatorAuthRouter);
 app.use('/api/admin',         adminAuthRouter);
 app.use('/api/trips',         tripsRouter);
+app.use('/api/wallet',        walletRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/ai',            aiRouter);
 app.use('/api/fares',         faresRouter);

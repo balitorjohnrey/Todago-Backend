@@ -6,6 +6,22 @@ const express = require('express');
 const { pool } = require('../db/database');
 const router = express.Router();
 
+const DIDIT_IDENTITY_COLUMNS = [
+  ['didit_session_id', 'TEXT'],
+  ['didit_workflow_id', 'TEXT'],
+  ['didit_reference_id', 'TEXT'],
+  ['didit_status', 'TEXT'],
+  ['didit_last_event', 'TEXT'],
+  ['didit_last_event_id', 'TEXT'],
+  ['didit_last_event_at', 'TIMESTAMPTZ'],
+];
+
+async function ensureDiditIdentityColumns(client, tableName) {
+  for (const [column, type] of DIDIT_IDENTITY_COLUMNS) {
+    await client.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS ${column} ${type}`);
+  }
+}
+
 router.post('/fix', async (req, res) => {
   const client = await pool.connect();
   const results = [];
@@ -53,6 +69,7 @@ router.post('/fix', async (req, res) => {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_status TEXT`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_last_event TEXT`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`);
+    await ensureDiditIdentityColumns(client, 'users');
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS profile_photo_url TEXT`);
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_type TEXT`);
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS valid_id_number TEXT`);
@@ -69,6 +86,7 @@ router.post('/fix', async (req, res) => {
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_status TEXT`);
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_last_event TEXT`);
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`);
+    await ensureDiditIdentityColumns(client, 'drivers');
     await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_type TEXT`);
     await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_number TEXT`);
     await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS valid_id_image_url TEXT`);
@@ -84,11 +102,15 @@ router.post('/fix', async (req, res) => {
     await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_status TEXT`);
     await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_last_event TEXT`);
     await client.query(`ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`);
+    await ensureDiditIdentityColumns(client, 'operators');
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_persona_inquiry ON users(persona_inquiry_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_users_didit_session ON users(didit_session_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_persona_inquiry ON drivers(persona_inquiry_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_didit_session ON drivers(didit_session_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_operators_persona_inquiry ON operators(persona_inquiry_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_operators_didit_session ON operators(didit_session_id)`);
     results.push('identity verification columns ensured');
 
     // 4. Ensure login_attempts has columns

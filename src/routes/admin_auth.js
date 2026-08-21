@@ -9,6 +9,11 @@ const {
 } = require('../utils/peakHourAnalytics');
 
 const router = express.Router();
+const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
+
+function isExternalKycProvider(provider) {
+  return EXTERNAL_KYC_PROVIDERS.has(String(provider || '').trim().toLowerCase());
+}
 
 function adminSecret() {
   return process.env.ADMIN_SECRET
@@ -337,12 +342,12 @@ router.patch('/drivers/:driverId/verification', requireAdminAuth, [
     }
 
     const isVerified = req.body.isVerified === true || req.body.isVerified === 'true';
-    if (isVerified && driver.identity_provider === 'persona' && driver.identity_is_verified !== true) {
+    if (isVerified && isExternalKycProvider(driver.identity_provider) && driver.identity_is_verified !== true) {
       return res.status(409).json({
         success: false,
         code: 'IDENTITY_VERIFICATION_REQUIRED',
         identity_status: driver.identity_verification_status || 'not_submitted',
-        message: 'Persona identity verification must be approved before driver approval.',
+        message: 'KYC identity verification must be approved before driver approval.',
       });
     }
 

@@ -23,10 +23,13 @@ const {
   validateIdentityPayload,
 } = require('../utils/identityVerification');
 const {
-  createPersonaInquiry,
-  isPersonaConfigured,
-} = require('../services/persona');
-const { savePersonaInquiry } = require('./kyc');
+  createKycVerification,
+  isExternalKycProvider,
+  isKycConfigured,
+  legacyPersonaPayload,
+  providerForNewAccount,
+  publicKycPayload,
+} = require('./kyc');
 
 const router = express.Router();
 
@@ -49,6 +52,11 @@ function sanitizeDriver(d) {
     persona_account_id,
     persona_reference_id,
     persona_last_event,
+    didit_session_id,
+    didit_workflow_id,
+    didit_reference_id,
+    didit_last_event,
+    didit_last_event_id,
     ...safe
   } = d;
   return safe;
@@ -339,9 +347,12 @@ router.post('/register',
       const salt = generateSalt();
       const passwordHash = await hashPassword(password, salt);
       const driverId = uuidv4();
-      const personaEnabled = isPersonaConfigured();
-      const identityStatus = hasManualIdentity ? 'submitted' : 'not_submitted';
-      const identityProvider = personaEnabled ? 'persona' : 'manual';
+      const kycProvider = providerForNewAccount();
+      const kycEnabled = kycProvider !== 'manual';
+      const identityStatus = kycEnabled
+        ? 'not_started'
+        : (hasManualIdentity ? 'submitted' : 'not_submitted');
+      const identityProvider = kycEnabled ? kycProvider : 'manual';
 
       await dbRun(
         `INSERT INTO drivers
@@ -394,19 +405,19 @@ router.post('/register',
         console.error('[Driver] Tricycle insert error:', err.message);
       });
 
-      let persona = null;
-      if (personaEnabled) {
+      let kyc = null;
+      if (kycEnabled) {
         try {
-          persona = await createPersonaInquiry({
+          kyc = await createKycVerification({
             role: 'driver',
             entityId: driverId,
             fullName: fullName.trim(),
             email: email.toLowerCase(),
             phone: phone.trim(),
+            provider: kycProvider,
           });
-          await savePersonaInquiry('driver', driverId, persona);
-        } catch (personaError) {
-          console.error('[Driver] Persona inquiry error:', personaError.message);
+        } catch (kycError) {
+          console.error(`[Driver] ${kycProvider} KYC error:`, kycError.message);
         }
       }
 
@@ -419,22 +430,22 @@ router.post('/register',
       );
 
       console.log(`[Driver] Registered: ${fullName} (${driverId})`);
+      const identityStep = kyc?.verificationUrl
+        ? 'Finish valid ID and face verification'
+        : 'Identity verification is pending';
 
       return res.status(201).json({
         success: true,
         message: association
-          ? `Driver registration submitted to ${association.association_name}. Finish Persona identity verification, then wait for operator approval.`
-          : 'Independent driver registration submitted. Finish Persona identity verification, then wait for admin approval.',
+          ? `Driver registration submitted to ${association.association_name}. ${identityStep}, then wait for operator approval.`
+          : `Independent driver registration submitted. ${identityStep}, then wait for admin approval.`,
         token: null,
         approval_status: 'pending',
         requires_admin_approval: !association,
         requires_operator_approval: !!association,
         driver: sanitizeDriver(driver),
-        persona: persona ? {
-          inquiryId: persona.inquiryId,
-          verificationUrl: persona.verificationUrl,
-          status: persona.status,
-        } : null,
+        kyc: publicKycPayload(kyc),
+        persona: legacyPersonaPayload(kyc),
       });
 
     } catch (error) {
@@ -596,20 +607,23 @@ router.post('/login', [
       });
     }
 
-    if (driver.identity_provider === 'persona' && driver.identity_is_verified !== true) {
-      let persona = null;
-      if (isPersonaConfigured()) {
+    if (isExternalKycProvider(driver.identity_provider) && driver.identity_is_verified !== true) {
+      let kyc = null;
+      const provider = isKycConfigured(driver.identity_provider)
+        ? driver.identity_provider
+        : providerForNewAccount();
+      if (isKycConfigured(provider)) {
         try {
-          persona = await createPersonaInquiry({
+          kyc = await createKycVerification({
             role: 'driver',
             entityId: driver.driver_id,
             fullName: driver.driver_name,
             email: driver.email,
             phone: driver.phone,
+            provider,
           });
-          await savePersonaInquiry('driver', driver.driver_id, persona);
-        } catch (personaError) {
-          console.error('[Driver] Persona retry inquiry error:', personaError.message);
+        } catch (kycError) {
+          console.error(`[Driver] ${provider} KYC retry error:`, kycError.message);
         }
       }
       await dbRun(
@@ -623,12 +637,9 @@ router.post('/login', [
         code: 'IDENTITY_VERIFICATION_REQUIRED',
         verification_required: true,
         identity_status: driver.identity_verification_status || 'not_submitted',
-        message: 'Complete Persona identity verification before driver login.',
-        persona: persona ? {
-          inquiryId: persona.inquiryId,
-          verificationUrl: persona.verificationUrl,
-          status: persona.status,
-        } : null,
+        message: 'Complete valid ID and face verification before driver login.',
+        kyc: publicKycPayload(kyc),
+        persona: legacyPersonaPayload(kyc),
       });
     }
 

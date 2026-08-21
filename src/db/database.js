@@ -19,6 +19,22 @@ const pool = new Pool({
 pool.on('connect', () => console.log('[DB] PostgreSQL connected'));
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
+const DIDIT_IDENTITY_COLUMNS = [
+  ['didit_session_id', 'TEXT'],
+  ['didit_workflow_id', 'TEXT'],
+  ['didit_reference_id', 'TEXT'],
+  ['didit_status', 'TEXT'],
+  ['didit_last_event', 'TEXT'],
+  ['didit_last_event_id', 'TEXT'],
+  ['didit_last_event_at', 'TIMESTAMPTZ'],
+];
+
+async function ensureDiditIdentityColumns(client, tableName) {
+  for (const [column, type] of DIDIT_IDENTITY_COLUMNS) {
+    await client.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS ${column} ${type}`);
+  }
+}
+
 async function initializeDatabase() {
   const client = await pool.connect();
   try {
@@ -112,6 +128,7 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`
     );
+    await ensureDiditIdentityColumns(client, 'users');
 
     // ── COMMUTERS (kept for backward compat — legacy table) ───────────────────
     await client.query(`
@@ -236,6 +253,7 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE operators ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`
     );
+    await ensureDiditIdentityColumns(client, 'operators');
 
     // ── DRIVERS ───────────────────────────────────────────────────────────────
     await client.query(`
@@ -348,6 +366,7 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE drivers ADD COLUMN IF NOT EXISTS persona_last_event_at TIMESTAMPTZ`
     );
+    await ensureDiditIdentityColumns(client, 'drivers');
 
     // ── TRICYCLES ─────────────────────────────────────────────────────────────
     await client.query(`
@@ -940,6 +959,9 @@ async function initializeDatabase() {
       `CREATE INDEX IF NOT EXISTS idx_users_persona_inquiry ON users(persona_inquiry_id)`
     );
     await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_users_didit_session ON users(didit_session_id)`
+    );
+    await client.query(
       `CREATE INDEX IF NOT EXISTS idx_commuters_email ON commuters(email)`
     );
     await client.query(
@@ -949,6 +971,9 @@ async function initializeDatabase() {
       `CREATE INDEX IF NOT EXISTS idx_drivers_persona_inquiry ON drivers(persona_inquiry_id)`
     );
     await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_drivers_didit_session ON drivers(didit_session_id)`
+    );
+    await client.query(
       `CREATE INDEX IF NOT EXISTS idx_drivers_body ON drivers(toda_body_number)`
     );
     await client.query(
@@ -956,6 +981,9 @@ async function initializeDatabase() {
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_operators_persona_inquiry ON operators(persona_inquiry_id)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_operators_didit_session ON operators(didit_session_id)`
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_trips_driver ON trips(driver_id)`

@@ -30,10 +30,13 @@ const {
   validateIdentityPayload,
 } = require('../utils/identityVerification');
 const {
-  createPersonaInquiry,
-  isPersonaConfigured,
-} = require('../services/persona');
-const { savePersonaInquiry } = require('./kyc');
+  createKycVerification,
+  isExternalKycProvider,
+  isKycConfigured,
+  legacyPersonaPayload,
+  providerForNewAccount,
+  publicKycPayload,
+} = require('./kyc');
 
 const router = express.Router();
 
@@ -56,6 +59,11 @@ function sanitizeOperator(op) {
     persona_account_id,
     persona_reference_id,
     persona_last_event,
+    didit_session_id,
+    didit_workflow_id,
+    didit_reference_id,
+    didit_last_event,
+    didit_last_event_id,
     ...safe
   } = op;
   return safe;
@@ -159,9 +167,12 @@ router.post('/register',
 
       const salt = generateSalt();
       const passwordHash = await hashPassword(password, salt);
-      const personaEnabled = isPersonaConfigured();
-      const identityStatus = hasManualIdentity ? 'submitted' : 'not_submitted';
-      const identityProvider = personaEnabled ? 'persona' : 'manual';
+      const kycProvider = providerForNewAccount();
+      const kycEnabled = kycProvider !== 'manual';
+      const identityStatus = kycEnabled
+        ? 'not_started'
+        : (hasManualIdentity ? 'submitted' : 'not_submitted');
+      const identityProvider = kycEnabled ? kycProvider : 'manual';
 
       const operatorId = uuidv4();
       await dbRun(
@@ -192,19 +203,19 @@ router.post('/register',
         ]
       );
 
-      let persona = null;
-      if (personaEnabled) {
+      let kyc = null;
+      if (kycEnabled) {
         try {
-          persona = await createPersonaInquiry({
+          kyc = await createKycVerification({
             role: 'operator',
             entityId: operatorId,
             fullName: contactName.trim(),
             email: email.toLowerCase(),
             phone: phone.trim(),
+            provider: kycProvider,
           });
-          await savePersonaInquiry('operator', operatorId, persona);
-        } catch (personaError) {
-          console.error('[Operator] Persona inquiry error:', personaError.message);
+        } catch (kycError) {
+          console.error(`[Operator] ${kycProvider} KYC error:`, kycError.message);
         }
       }
 
@@ -222,14 +233,13 @@ router.post('/register',
 
       return res.status(201).json({
         success: true,
-        message: 'Operator account created. Finish Persona identity verification, then wait for LTFRB review.',
+        message: kyc?.verificationUrl
+          ? 'Operator account created. Finish valid ID and face verification, then wait for LTFRB review.'
+          : 'Operator account created. Identity verification is pending, then wait for LTFRB review.',
         token: null,
         operator: sanitizeOperator(operator),
-        persona: persona ? {
-          inquiryId: persona.inquiryId,
-          verificationUrl: persona.verificationUrl,
-          status: persona.status,
-        } : null,
+        kyc: publicKycPayload(kyc),
+        persona: legacyPersonaPayload(kyc),
       });
 
     } catch (error) {
@@ -332,20 +342,23 @@ router.post('/login', [
       });
     }
 
-    if (operator.identity_provider === 'persona' && operator.identity_is_verified !== true) {
-      let persona = null;
-      if (isPersonaConfigured()) {
+    if (isExternalKycProvider(operator.identity_provider) && operator.identity_is_verified !== true) {
+      let kyc = null;
+      const provider = isKycConfigured(operator.identity_provider)
+        ? operator.identity_provider
+        : providerForNewAccount();
+      if (isKycConfigured(provider)) {
         try {
-          persona = await createPersonaInquiry({
+          kyc = await createKycVerification({
             role: 'operator',
             entityId: operator.operator_id,
             fullName: operator.contact_name,
             email: operator.email,
             phone: operator.phone,
+            provider,
           });
-          await savePersonaInquiry('operator', operator.operator_id, persona);
-        } catch (personaError) {
-          console.error('[Operator] Persona retry inquiry error:', personaError.message);
+        } catch (kycError) {
+          console.error(`[Operator] ${provider} KYC retry error:`, kycError.message);
         }
       }
       await dbRun(
@@ -359,12 +372,9 @@ router.post('/login', [
         code: 'IDENTITY_VERIFICATION_REQUIRED',
         verification_required: true,
         identity_status: operator.identity_verification_status || 'not_submitted',
-        message: 'Complete Persona identity verification before operator login.',
-        persona: persona ? {
-          inquiryId: persona.inquiryId,
-          verificationUrl: persona.verificationUrl,
-          status: persona.status,
-        } : null,
+        message: 'Complete valid ID and face verification before operator login.',
+        kyc: publicKycPayload(kyc),
+        persona: legacyPersonaPayload(kyc),
       });
     }
 
@@ -527,12 +537,12 @@ router.patch('/drivers/:driverId/verification', requireOperatorAuth, [
     }
 
     const isVerified = req.body.isVerified === true || req.body.isVerified === 'true';
-    if (isVerified && driver.identity_provider === 'persona' && driver.identity_is_verified !== true) {
+    if (isVerified && isExternalKycProvider(driver.identity_provider) && driver.identity_is_verified !== true) {
       return res.status(409).json({
         success: false,
         code: 'IDENTITY_VERIFICATION_REQUIRED',
         identity_status: driver.identity_verification_status || 'not_submitted',
-        message: 'Persona identity verification must be approved before driver approval.',
+        message: 'KYC identity verification must be approved before driver approval.',
       });
     }
 

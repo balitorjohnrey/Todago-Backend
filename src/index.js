@@ -15,6 +15,7 @@ app.use(express.json({
       req.originalUrl?.startsWith('/api/trips/paymongo/webhook')
       || req.originalUrl?.startsWith('/api/wallet/paymongo/webhook')
       || req.originalUrl?.startsWith('/api/kyc/persona/webhook')
+      || req.originalUrl?.startsWith('/api/kyc/didit/webhook')
     ) {
       req.rawBody = Buffer.from(buf || '', encoding || 'utf8');
     }

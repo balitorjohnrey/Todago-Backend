@@ -17,9 +17,14 @@ const {
 } = require('../services/walletLedger');
 
 const router = express.Router();
+const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
 const TRICYCLE_AVERAGE_SPEED_KMH = 19.94;
 const DRIVER_LOCATION_FRESHNESS_MINUTES = 5;
 const ONLINE_PAYMENT_METHODS = ['gcash', 'maya', 'wallet'];
+
+function isExternalKycProvider(provider) {
+  return EXTERNAL_KYC_PROVIDERS.has(String(provider || '').trim().toLowerCase());
+}
 
 function haversineKm(aLat, aLng, bLat, bLng) {
   const toRad = (value) => value * Math.PI / 180;
@@ -479,12 +484,12 @@ router.post('/request', requireAuth, [
     if (!passenger) {
       return res.status(404).json({ success: false, message: 'Passenger account not found' });
     }
-    if (passenger.identity_provider === 'persona' && passenger.identity_is_verified !== true) {
+    if (isExternalKycProvider(passenger.identity_provider) && passenger.identity_is_verified !== true) {
       return res.status(403).json({
         success: false,
         code: 'IDENTITY_VERIFICATION_REQUIRED',
         identity_status: passenger.identity_verification_status || 'not_submitted',
-        message: 'Complete Persona identity verification before booking a ride.',
+        message: 'Complete valid ID and face verification before booking a ride.',
       });
     }
 

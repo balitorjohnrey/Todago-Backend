@@ -12,10 +12,13 @@ const {
   validateIdentityPayload,
 } = require('../utils/identityVerification');
 const {
-  createPersonaInquiry,
-  isPersonaConfigured,
-} = require('../services/persona');
-const { savePersonaInquiry } = require('./kyc');
+  createKycVerification,
+  isExternalKycProvider,
+  isKycConfigured,
+  legacyPersonaPayload,
+  providerForNewAccount,
+  publicKycPayload,
+} = require('./kyc');
 
 const router = express.Router();
 
@@ -39,6 +42,11 @@ function sanitizeUser(user) {
     persona_account_id,
     persona_reference_id,
     persona_last_event,
+    didit_session_id,
+    didit_workflow_id,
+    didit_reference_id,
+    didit_last_event,
+    didit_last_event_id,
     ...safe
   } = user;
   return safe;
@@ -104,9 +112,12 @@ router.post('/register', [
     const salt         = generateSalt();
     const passwordHash = await hashPassword(password, salt);
     const userId       = uuidv4();
-    const personaEnabled = isPersonaConfigured();
-    const identityStatus = hasManualIdentity ? 'submitted' : 'not_submitted';
-    const identityProvider = personaEnabled ? 'persona' : 'manual';
+    const kycProvider = providerForNewAccount();
+    const kycEnabled = kycProvider !== 'manual';
+    const identityStatus = kycEnabled
+      ? 'not_started'
+      : (hasManualIdentity ? 'submitted' : 'not_submitted');
+    const identityProvider = kycEnabled ? kycProvider : 'manual';
 
     await dbRun(
       `INSERT INTO users
@@ -132,19 +143,19 @@ router.post('/register', [
       ]
     );
 
-    let persona = null;
-    if (personaEnabled) {
+    let kyc = null;
+    if (kycEnabled) {
       try {
-        persona = await createPersonaInquiry({
+        kyc = await createKycVerification({
           role: 'passenger',
           entityId: userId,
           fullName: fullName.trim(),
           email: email.toLowerCase(),
           phone: phone.trim(),
+          provider: kycProvider,
         });
-        await savePersonaInquiry('passenger', userId, persona);
-      } catch (personaError) {
-        console.error('[Auth] Persona inquiry error:', personaError.message);
+      } catch (kycError) {
+        console.error(`[Auth] ${kycProvider} KYC error:`, kycError.message);
       }
     }
 
@@ -155,16 +166,13 @@ router.post('/register', [
 
     return res.status(201).json({
       success : true,
-      message : persona?.verificationUrl
-        ? 'Passenger account created. Finish Persona identity verification to book rides.'
+      message : kyc?.verificationUrl
+        ? 'Passenger account created. Finish valid ID and face verification to book rides.'
         : 'Passenger account created. Identity verification is pending.',
       token,
       user    : sanitizeUser(user),
-      persona : persona ? {
-        inquiryId: persona.inquiryId,
-        verificationUrl: persona.verificationUrl,
-        status: persona.status,
-      } : null,
+      kyc     : publicKycPayload(kyc),
+      persona : legacyPersonaPayload(kyc),
     });
 
   } catch (error) {
@@ -261,26 +269,29 @@ router.post('/login', [
       [email, ip, true]
     ).catch(() => {});
 
-    let persona = null;
+    let kyc = null;
     let responseUser = user;
-    if (user.identity_provider === 'persona'
-        && user.identity_is_verified !== true
-        && isPersonaConfigured()) {
-      try {
-        persona = await createPersonaInquiry({
-          role: 'passenger',
-          entityId: user.id,
-          fullName: user.full_name,
-          email: user.email,
-          phone: user.phone,
-        });
-        await savePersonaInquiry('passenger', user.id, persona);
-        responseUser = await dbGet(
-          'SELECT * FROM users WHERE id = $1 AND is_active = true',
-          [user.id]
-        ) || user;
-      } catch (personaError) {
-        console.error('[Auth] Persona retry inquiry error:', personaError.message);
+    if (isExternalKycProvider(user.identity_provider) && user.identity_is_verified !== true) {
+      const provider = isKycConfigured(user.identity_provider)
+        ? user.identity_provider
+        : providerForNewAccount();
+      if (isKycConfigured(provider)) {
+        try {
+          kyc = await createKycVerification({
+            role: 'passenger',
+            entityId: user.id,
+            fullName: user.full_name,
+            email: user.email,
+            phone: user.phone,
+            provider,
+          });
+          responseUser = await dbGet(
+            'SELECT * FROM users WHERE id = $1 AND is_active = true',
+            [user.id]
+          ) || user;
+        } catch (kycError) {
+          console.error(`[Auth] ${provider} KYC retry error:`, kycError.message);
+        }
       }
     }
 
@@ -292,11 +303,8 @@ router.post('/login', [
       message : 'Login successful',
       token,
       user    : sanitizeUser(responseUser),
-      persona : persona ? {
-        inquiryId: persona.inquiryId,
-        verificationUrl: persona.verificationUrl,
-        status: persona.status,
-      } : null,
+      kyc     : publicKycPayload(kyc),
+      persona : legacyPersonaPayload(kyc),
     });
 
   } catch (error) {

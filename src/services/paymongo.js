@@ -1,9 +1,86 @@
 const crypto = require('crypto');
 
 const PAYMONGO_API_BASE = 'https://api.paymongo.com';
+let capabilitiesCache;
+
+const PAYMENT_METHOD_LABELS = {
+  gcash: 'GCash', paymaya: 'Maya', qrph: 'QR Ph', grab_pay: 'GrabPay',
+  shopeepay: 'ShopeePay', card: 'Credit / debit card', dob: 'Online banking',
+  dob_ubp: 'UnionBank', dob_bpi: 'BPI', brankas_bdo: 'BDO',
+  brankas_landbank: 'Landbank', brankas_metrobank: 'Metrobank',
+};
+
+function isLiveMode() {
+  return getSecretKey().startsWith('sk_live_');
+}
+
+async function paymongoRequest(path, { method = 'GET', body, idempotencyKey } = {}) {
+  const secretKey = getSecretKey();
+  if (!secretKey) {
+    const error = new Error('PayMongo payments are not configured. Please try again later.');
+    error.statusCode = 503;
+    throw error;
+  }
+  const response = await fetch(`${PAYMONGO_API_BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}`,
+      'Content-Type': 'application/json', Accept: 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(15000),
+  });
+  const json = await response.json();
+  if (!response.ok) {
+    const error = new Error(json?.errors?.[0]?.detail || 'PayMongo could not process this request.');
+    error.statusCode = response.status;
+    throw error;
+  }
+  return json;
+}
+
+function normalizeCapabilities(json) {
+  const data = json?.data ?? json;
+  const methods = Array.isArray(data) ? data :
+    data?.attributes?.payment_methods ?? data?.payment_methods ??
+    data?.attributes?.payment_method_types ?? data?.payment_method_types;
+  if (!Array.isArray(methods)) {
+    throw new Error('Unable to read the payment methods available for this account.');
+  }
+  return [...new Set(methods.filter((item) =>
+    typeof item === 'string' || !item?.status || ['active', 'enabled', 'configured'].includes(item.status)
+  ).map((item) => typeof item === 'string' ? item : item.id || item.type || item.payment_method))]
+    .filter((id) => typeof id === 'string' &&
+      (PAYMENT_METHOD_LABELS[id] || /^(dob_|brankas_)[a-z0-9_]+$/.test(id)));
+}
+
+async function getAvailablePaymentMethods() {
+  const cacheKey = getSecretKey();
+  if (!capabilitiesCache || capabilitiesCache.key !== cacheKey || capabilitiesCache.until < Date.now()) {
+    const json = await paymongoRequest('/v1/merchants/capabilities/payment_methods');
+    capabilitiesCache = { key: cacheKey, until: Date.now() + 60000, methods: normalizeCapabilities(json) };
+  }
+  return capabilitiesCache.methods.map((type) => ({
+    id: type === 'paymaya' ? 'maya' : type,
+    type,
+    label: PAYMENT_METHOD_LABELS[type] || type.replace(/_/g, ' ').toUpperCase(),
+  }));
+}
+
+async function retrieveCheckoutSession(id) {
+  if (!/^cs_[a-zA-Z0-9_-]+$/.test(id || '')) throw new Error('Invalid checkout session');
+  return (await paymongoRequest(`/v1/checkout_sessions/${encodeURIComponent(id)}`)).data;
+}
+
+function getPaidPayment(session) {
+  const attrs = session?.attributes || {};
+  const payments = [...(attrs.payments || []), ...(attrs.payment_intent?.attributes?.payments || [])];
+  return payments.find((payment) => (payment.attributes || payment).status === 'paid') || null;
+}
 
 function getSecretKey() {
-  return process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK || '';
+  return (process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK || '').trim();
 }
 
 function getPublicBaseUrl() {
@@ -48,6 +125,7 @@ async function createCheckoutSession({
   metadata = {},
   lineItemName,
   idempotencyKey,
+  paymentMethodTypes,
 }) {
   const secretKey = getSecretKey();
   if (!secretKey) {
@@ -64,6 +142,14 @@ async function createCheckoutSession({
   }
 
   const publicBaseUrl = getPublicBaseUrl();
+  const available = await getAvailablePaymentMethods();
+  const requested = paymentMethodTypes || paymongoMethodTypes(paymentMethod);
+  const methodTypes = [...new Set(requested)].filter((type) => available.some((item) => item.type === type));
+  if (!methodTypes.length) {
+    const error = new Error('This payment method is not available on TodaGo right now. Please choose another method.');
+    error.statusCode = 422;
+    throw error;
+  }
   const referenceNumber = referenceId || tripId;
   const billing = {
     name: passengerName || 'TodaGo Passenger',
@@ -82,7 +168,7 @@ async function createCheckoutSession({
             description: description || `TodaGo payment ${referenceNumber}`,
           },
         ],
-        payment_method_types: paymongoMethodTypes(paymentMethod),
+        payment_method_types: methodTypes,
         success_url: successUrl || `${publicBaseUrl}/api/trips/paymongo/return?tripId=${encodeURIComponent(tripId)}&status=success`,
         cancel_url: cancelUrl || `${publicBaseUrl}/api/trips/paymongo/return?tripId=${encodeURIComponent(tripId)}&status=cancelled`,
         reference_number: referenceNumber,
@@ -101,26 +187,14 @@ async function createCheckoutSession({
     },
   };
 
-  const response = await fetch(`${PAYMONGO_API_BASE}/v2/checkout_sessions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'Idempotency-Key': idempotencyKey || `todago-${referenceNumber}-${paymentMethod || 'wallet'}`,
-    },
-    body: JSON.stringify(body),
+  const json = await paymongoRequest('/v2/checkout_sessions', {
+    method: 'POST', body,
+    idempotencyKey: idempotencyKey || `todago-${referenceNumber}-${paymentMethod || 'wallet'}`,
   });
-  const json = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail =
-      json?.errors?.[0]?.detail ||
-      json?.errors?.[0]?.message ||
-      json?.message ||
-      'Unable to create PayMongo checkout session';
-    const error = new Error(detail);
-    error.statusCode = response.status;
-    error.response = json;
+  if (Array.isArray(json.data?.attributes?.payment_method_types) &&
+      json.data.attributes.payment_method_types.length === 0) {
+    const error = new Error('No payment methods are available for this checkout. Please try another method.');
+    error.statusCode = 422;
     throw error;
   }
   return json.data;
@@ -128,7 +202,8 @@ async function createCheckoutSession({
 
 function verifyWebhookSignature({ rawBody, signatureHeader, livemode }) {
   const secret = process.env.PAYMONGO_WEBHOOK_SECRET;
-  if (!secret) return true;
+  if (!secret) return false;
+  if (Boolean(livemode) !== isLiveMode()) return false;
   if (!rawBody || !signatureHeader) return false;
 
   const parts = {};
@@ -159,4 +234,9 @@ module.exports = {
   createCheckoutSession,
   paymongoMethodTypes,
   verifyWebhookSignature,
+  getAvailablePaymentMethods,
+  normalizeCapabilities,
+  retrieveCheckoutSession,
+  getPaidPayment,
+  isLiveMode,
 };

@@ -110,11 +110,27 @@ async function completeWalletTopUp({
   transactionId,
   checkoutSessionId,
   paymentId,
+  amountInCentavos,
+  currency,
 }) {
-  if (!transactionId && !checkoutSessionId) {
-    return { updated: false };
+  if (!checkoutSessionId || !paymentId || currency !== 'PHP' ||
+      !Number.isSafeInteger(amountInCentavos) || amountInCentavos <= 0) {
+    throw new Error('A verified PHP payment is required to complete a top-up');
   }
-
+  const existing = await pool.query(
+    `SELECT transaction_id, user_id, amount, status, checkout_session_id
+     FROM wallet_transactions
+     WHERE type = 'topup' AND ${transactionId ? 'transaction_id = $1' : 'checkout_session_id = $1'}`,
+    [transactionId || checkoutSessionId]
+  );
+  const transaction = existing.rows[0];
+  if (!transaction) throw new Error('Wallet top-up not found');
+  if (Math.round(money(transaction.amount) * 100) !== amountInCentavos ||
+      (transaction.checkout_session_id && transaction.checkout_session_id !== checkoutSessionId)) {
+    throw new Error('Payment does not match the wallet top-up');
+  }
+  if (transaction.status === 'completed') return { updated: false, transaction };
+  if (transaction.status !== 'pending') throw new Error('This top-up is no longer pending');
   const result = await pool.query(
     `UPDATE wallet_transactions
      SET status = 'completed',
@@ -122,13 +138,11 @@ async function completeWalletTopUp({
          external_reference = COALESCE($2, external_reference),
          completed_at = COALESCE(completed_at, NOW()),
          updated_at = NOW()
-     WHERE type = 'topup'
-       AND (
-         transaction_id = $3
-         OR checkout_session_id = $1
-       )
+      WHERE type = 'topup' AND status = 'pending'
+        AND transaction_id = $3
+        AND (checkout_session_id IS NULL OR checkout_session_id = $1)
      RETURNING transaction_id, user_id`,
-    [checkoutSessionId || null, paymentId || checkoutSessionId || null, transactionId || null]
+    [checkoutSessionId, paymentId, transaction.transaction_id]
   );
 
   return {

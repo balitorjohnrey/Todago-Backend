@@ -10,11 +10,12 @@ const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
 const {
   createCheckoutSession,
   verifyWebhookSignature,
+  getPaidPayment,
 } = require('../services/paymongo');
 const {
-  completeWalletTopUp,
   debitWalletForTrip,
 } = require('../services/walletLedger');
+const { settleWalletCheckout } = require('../services/walletPayments');
 
 const router = express.Router();
 const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
@@ -254,43 +255,42 @@ router.post('/paymongo/webhook', async (req, res) => {
     const attrs = session?.attributes || {};
     const walletTransactionId = attrs.metadata?.wallet_transaction_id;
     const tripId = attrs.reference_number || attrs.metadata?.trip_id;
-    const payment = attrs.payment_intent?.attributes?.payments?.[0] ||
-      attrs.payments?.[0] ||
-      null;
+    const payment = getPaidPayment(session);
 
     if (walletTransactionId || attrs.metadata?.payment_type === 'wallet_topup') {
-      await completeWalletTopUp({
-        transactionId: walletTransactionId || attrs.reference_number || null,
-        checkoutSessionId: session?.id || null,
-        paymentId: payment?.id || null,
-      });
+      await settleWalletCheckout(session, livemode);
       return res.status(200).json({ success: true });
     }
 
     if (!tripId && !session?.id) {
       return res.status(200).json({ success: true, ignored: true });
     }
+    const paid = payment?.attributes || payment;
+    if (!payment || paid.currency !== 'PHP') throw new Error('No verified PHP payment in checkout');
 
-    await dbRun(
+    const updated = await dbRun(
       `UPDATE trips
        SET payment_status = 'paid',
            paymongo_checkout_session_id = COALESCE(paymongo_checkout_session_id, $1),
            paymongo_payment_id = COALESCE($2, paymongo_payment_id),
            paymongo_paid_at = NOW(),
            payment_reference = COALESCE($3, payment_reference)
-       WHERE trip_id = $4 OR paymongo_checkout_session_id = $1`,
+       WHERE paymongo_checkout_session_id = $1 AND trip_id = $4
+         AND ROUND(fare * 100) = $5 AND payment_method IN ('gcash','maya')`,
       [
         session?.id || null,
         payment?.id || null,
         payment?.id || session?.id || null,
         tripId || null,
+        paid.amount,
       ]
     );
+    if (!updated.rowCount) throw new Error('Checkout does not match a payable trip');
 
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error('[PayMongo] Webhook error:', err.message);
-    return res.status(200).json({ success: false });
+    return res.status(500).json({ success: false });
   }
 });
 

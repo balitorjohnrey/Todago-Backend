@@ -7,11 +7,13 @@ const { dbAll, dbGet, dbRun } = require('../db/database');
 const {
   createCheckoutSession,
   verifyWebhookSignature,
+  getAvailablePaymentMethods,
+  isLiveMode,
 } = require('../services/paymongo');
 const {
-  completeWalletTopUp,
   getWalletBalance,
 } = require('../services/walletLedger');
+const { settleWalletCheckout, reconcileWalletTopUp, reconcileRecentTopUps } = require('../services/walletPayments');
 
 const router = express.Router();
 const PROVIDERS = ['gcash', 'maya'];
@@ -26,7 +28,9 @@ function getPublicBaseUrl() {
 }
 
 function providerLabel(provider) {
-  return provider === 'maya' ? 'Maya' : 'GCash';
+  return { gcash: 'GCash', maya: 'Maya', qrph: 'QR Ph', grab_pay: 'GrabPay',
+    shopeepay: 'ShopeePay', card: 'Card', dob: 'Online banking' }[provider] ||
+    String(provider).replace(/_/g, ' ').toUpperCase();
 }
 
 function providerEmoji(provider) {
@@ -123,7 +127,6 @@ async function loadWalletPayload(userId) {
          COALESCE(completed_at, created_at) AS occurred_at
        FROM wallet_transactions
        WHERE user_id = $1
-         AND status <> 'failed'
        ORDER BY COALESCE(completed_at, created_at) DESC
        LIMIT 50`,
       [userId]
@@ -221,11 +224,50 @@ async function loadWalletPayload(userId) {
 router.get('/', requireAuth, async (req, res) => {
   if (!requirePassenger(req, res)) return;
   try {
+    // A PayMongo outage must not hide an existing wallet balance.
+    reconcileRecentTopUps(req.userId).catch((error) => {
+      console.error('[Wallet] Background payment verification:', error.message);
+    });
     const payload = await loadWalletPayload(req.userId);
     return res.json({ success: true, wallet: payload });
   } catch (error) {
     console.error('[Wallet] Summary error:', error.message);
     return res.status(500).json({ success: false, message: 'Unable to load wallet' });
+  }
+});
+
+router.get('/payment-methods', requireAuth, async (req, res) => {
+  if (!requirePassenger(req, res)) return;
+  try {
+    const methods = await getAvailablePaymentMethods();
+    return res.json({ success: true, methods, testMode: !isLiveMode(),
+      message: methods.length ? null : 'No payment methods are available yet. Please try again later.' });
+  } catch (error) {
+    console.error('[Wallet] Payment methods:', error.message);
+    return res.status(503).json({ success: false,
+      message: 'Payment methods could not be loaded. Please try again shortly.' });
+  }
+});
+
+router.get('/top-ups/:transactionId', requireAuth, [
+  param('transactionId').isUUID().withMessage('Invalid top-up'),
+], async (req, res) => {
+  if (!requirePassenger(req, res)) return;
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(422).json({ success: false, message: 'Invalid top-up' });
+  try {
+    const transaction = await dbGet(`SELECT transaction_id, checkout_session_id, status
+      FROM wallet_transactions WHERE transaction_id = $1 AND user_id = $2 AND type = 'topup'`,
+    [req.params.transactionId, req.userId]);
+    if (!transaction) return res.status(404).json({ success: false, message: 'Top-up not found' });
+    await reconcileWalletTopUp(transaction);
+    const updated = await dbGet(`SELECT status FROM wallet_transactions WHERE transaction_id = $1`,
+      [transaction.transaction_id]);
+    return res.json({ success: true, status: updated.status, wallet: await loadWalletPayload(req.userId) });
+  } catch (error) {
+    console.error('[Wallet] Top-up verification:', error.message);
+    return res.status(502).json({ success: false,
+      message: 'Payment confirmation is temporarily unavailable. Your wallet will refresh when it is confirmed.' });
   }
 });
 
@@ -312,7 +354,7 @@ router.delete('/linked-accounts/:provider', requireAuth, [
 });
 
 router.post('/top-up', requireAuth, [
-  body('provider').isIn(PROVIDERS).withMessage('Choose GCash or Maya'),
+  body('provider').isString().isLength({ min: 2, max: 50 }).withMessage('Choose a payment method'),
   body('amount')
     .isFloat({ min: 1, max: 50000 })
     .withMessage('Top-up amount must be between PHP 1 and PHP 50,000'),
@@ -327,19 +369,11 @@ router.post('/top-up', requireAuth, [
   const amount = toAmount(req.body.amount);
 
   try {
-    const linked = await dbGet(
-      `SELECT account_id
-       FROM linked_payment_accounts
-       WHERE user_id = $1
-         AND provider = $2
-         AND status = 'linked'`,
-      [req.userId, provider]
-    );
-    if (!linked) {
-      return res.status(409).json({
-        success: false,
-        message: `Link a real ${providerLabel(provider)} account before topping up.`,
-      });
+    const methods = await getAvailablePaymentMethods();
+    const selectedMethod = methods.find((method) => method.id === provider);
+    if (!selectedMethod) {
+      return res.status(422).json({ success: false,
+        message: 'That payment method is unavailable. Please select another method.' });
     }
 
     const user = await dbGet(
@@ -364,7 +398,7 @@ router.post('/top-up', requireAuth, [
         provider,
         amount,
         `${providerLabel(provider)} Top-up`,
-        `Via linked ${providerLabel(provider)} account`,
+        `Via ${selectedMethod.label}`,
         `wallet_topup:${transactionId}`,
       ]
     );
@@ -376,6 +410,7 @@ router.post('/top-up', requireAuth, [
         referenceId: transactionId,
         amount,
         paymentMethod: provider,
+        paymentMethodTypes: [selectedMethod.type],
         passengerName: user.full_name,
         passengerPhone: user.phone,
         lineItemName: 'TodaGo wallet top-up',
@@ -401,6 +436,11 @@ router.post('/top-up', requireAuth, [
     }
 
     const checkoutUrl = session.attributes?.checkout_url;
+    if (!checkoutUrl || !checkoutUrl.startsWith('https://checkout.paymongo.com/')) {
+      await dbRun(`UPDATE wallet_transactions SET status = 'failed', updated_at = NOW()
+        WHERE transaction_id = $1`, [transactionId]);
+      throw new Error('PayMongo did not return a valid checkout page');
+    }
     await dbRun(
       `UPDATE wallet_transactions
        SET checkout_session_id = $1,
@@ -416,6 +456,7 @@ router.post('/top-up', requireAuth, [
       checkoutSessionId: session.id,
       checkoutUrl,
       transactionId,
+      testMode: !isLiveMode(),
       wallet: await loadWalletPayload(req.userId),
     });
   } catch (error) {
@@ -437,8 +478,9 @@ router.get('/paymongo/return', (req, res) => {
     .send(`<!doctype html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>TodaGo Wallet</title></head>
 <body style="font-family:Arial,sans-serif;padding:28px;line-height:1.45">
-<h1>TodaGo wallet top-up ${status}</h1>
-<p>You can return to the TodaGo app. Your wallet will update once payment is confirmed.</p>
+<h1>${status === 'successful' ? 'Checking your top-up' : 'Checkout closed'}</h1>
+<p>Your wallet is updated only after PayMongo confirms payment.</p>
+<p><a href="todago://wallet" style="display:inline-block;background:#13232f;color:white;padding:14px 24px;border-radius:12px;text-decoration:none">Return to TodaGo Wallet</a></p>
 </body></html>`);
 });
 
@@ -463,22 +505,12 @@ router.post('/paymongo/webhook', async (req, res) => {
     }
 
     const session = root?.data || root?.attributes?.data;
-    const attrs = session?.attributes || {};
-    const payment = attrs.payment_intent?.attributes?.payments?.[0] ||
-      attrs.payments?.[0] ||
-      null;
-    const transactionId = attrs.metadata?.wallet_transaction_id || attrs.reference_number;
-
-    await completeWalletTopUp({
-      transactionId,
-      checkoutSessionId: session?.id || null,
-      paymentId: payment?.id || null,
-    });
+    await settleWalletCheckout(session, livemode);
 
     return res.status(200).json({ success: true });
   } catch (error) {
     console.error('[Wallet] Webhook error:', error.message);
-    return res.status(200).json({ success: false });
+    return res.status(500).json({ success: false });
   }
 });
 

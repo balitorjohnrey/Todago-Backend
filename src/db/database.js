@@ -722,6 +722,11 @@ async function initializeDatabase() {
     await client.query(
       `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`
     );
+    await client.query(`ALTER TABLE wallet_transactions DROP CONSTRAINT IF EXISTS wallet_transactions_provider_check`);
+    await client.query(`ALTER TABLE wallet_transactions ADD CONSTRAINT wallet_transactions_provider_check
+      CHECK (provider IS NULL OR provider IN
+        ('gcash','maya','wallet','cash','system','qrph','grab_pay','shopeepay','card','dob','dob_ubp','dob_bpi')
+        OR provider ~ '^(dob_|brankas_)[a-z0-9_]+$')`);
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_linked_payment_accounts_user
        ON linked_payment_accounts(user_id, provider, status)`

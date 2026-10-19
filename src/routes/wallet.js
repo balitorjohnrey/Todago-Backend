@@ -9,11 +9,14 @@ const {
   verifyWebhookSignature,
   getAvailablePaymentMethods,
   isLiveMode,
+  createWalletPaymentIntent,
+  attachWalletPaymentMethod,
 } = require('../services/paymongo');
 const {
   getWalletBalance,
 } = require('../services/walletLedger');
 const { settleWalletCheckout, reconcileWalletTopUp, reconcileRecentTopUps } = require('../services/walletPayments');
+const { walletIntentPresentation, handleWalletPaymentEvent } = require('../services/walletIntentPayments');
 
 const router = express.Router();
 const PROVIDERS = ['gcash', 'maya'];
@@ -73,6 +76,7 @@ function serializeLedgerTransaction(row) {
     occurred_at: row.occurred_at,
     trip_id: row.trip_id,
     checkout_url: row.checkout_url,
+    native_checkout: Boolean(row.payment_intent_id),
   };
 }
 
@@ -123,6 +127,7 @@ async function loadWalletPayload(userId) {
          title,
          description,
          checkout_url,
+         payment_intent_id,
          trip_id,
          COALESCE(completed_at, created_at) AS occurred_at
        FROM wallet_transactions
@@ -256,14 +261,16 @@ router.get('/top-ups/:transactionId', requireAuth, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(422).json({ success: false, message: 'Invalid top-up' });
   try {
-    const transaction = await dbGet(`SELECT transaction_id, checkout_session_id, status
+    const transaction = await dbGet(`SELECT transaction_id, checkout_session_id, payment_intent_id, provider, status
       FROM wallet_transactions WHERE transaction_id = $1 AND user_id = $2 AND type = 'topup'`,
     [req.params.transactionId, req.userId]);
     if (!transaction) return res.status(404).json({ success: false, message: 'Top-up not found' });
-    await reconcileWalletTopUp(transaction);
+    const intent = await reconcileWalletTopUp(transaction);
     const updated = await dbGet(`SELECT status FROM wallet_transactions WHERE transaction_id = $1`,
       [transaction.transaction_id]);
-    return res.json({ success: true, status: updated.status, wallet: await loadWalletPayload(req.userId) });
+    return res.json({ success: true, status: updated.status, testMode: !isLiveMode(),
+      ...(intent ? { payment: walletIntentPresentation(intent, transaction.provider) } : {}),
+      wallet: await loadWalletPayload(req.userId) });
   } catch (error) {
     console.error('[Wallet] Top-up verification:', error.message);
     return res.status(502).json({ success: false,
@@ -355,6 +362,7 @@ router.delete('/linked-accounts/:provider', requireAuth, [
 
 router.post('/top-up', requireAuth, [
   body('provider').isString().isLength({ min: 2, max: 50 }).withMessage('Choose a payment method'),
+  body('checkoutExperience').optional().isIn(['native', 'hosted']).withMessage('Invalid checkout experience'),
   body('amount')
     .isFloat({ min: 1, max: 50000 })
     .withMessage('Top-up amount must be between PHP 1 and PHP 50,000'),
@@ -404,6 +412,30 @@ router.post('/top-up', requireAuth, [
     );
 
     const publicBaseUrl = getPublicBaseUrl();
+    // Older app versions continue to receive Hosted Checkout. New apps use the
+    // Payment API for native QR and wallet authorization without a hosted header.
+    if (req.body.checkoutExperience === 'native' && ['gcash', 'maya', 'qrph'].includes(provider)) {
+      let storedIntent;
+      try {
+        const intent = await createWalletPaymentIntent({ transactionId, userId: req.userId,
+          amount, methodType: selectedMethod.type });
+        if (!/^pi_[a-zA-Z0-9_-]+$/.test(intent?.id || '')) throw new Error('Invalid payment intent');
+        await dbRun(`UPDATE wallet_transactions SET payment_intent_id = $1, updated_at = NOW()
+          WHERE transaction_id = $2 AND status = 'pending'`, [intent.id, transactionId]);
+        storedIntent = intent.id;
+        const attached = await attachWalletPaymentMethod({ intentId: intent.id,
+          methodType: selectedMethod.type, name: user.full_name, phone: user.phone, transactionId });
+        if (attached.id !== storedIntent) throw new Error('Payment intent does not match');
+        return res.status(201).json({ success: true, transactionId, testMode: !isLiveMode(),
+          payment: walletIntentPresentation(attached, provider), wallet: await loadWalletPayload(req.userId) });
+      } catch (error) {
+        // If attach timed out, the provider may still have accepted it. Keep the
+        // stored intent pending so history/polling can recover its true outcome.
+        if (!storedIntent) await dbRun(`UPDATE wallet_transactions SET status = 'failed', updated_at = NOW()
+          WHERE transaction_id = $1 AND status = 'pending'`, [transactionId]);
+        throw error;
+      }
+    }
     let session;
     try {
       session = await createCheckoutSession({
@@ -476,7 +508,7 @@ router.get('/paymongo/return', (req, res) => {
     .status(200)
     .type('html')
     .send(`<!doctype html>
-<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>TodaGo Wallet</title></head>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>TodaGo Wallet Checkout</title></head>
 <body style="font-family:Arial,sans-serif;padding:28px;line-height:1.45">
 <h1>${status === 'successful' ? 'Checking your top-up' : 'Checkout closed'}</h1>
 <p>Your wallet is updated only after PayMongo confirms payment.</p>
@@ -500,6 +532,10 @@ router.post('/paymongo/webhook', async (req, res) => {
     const eventType = root?.type === 'event'
       ? root?.attributes?.type
       : (root?.type || root?.attributes?.type);
+    if (['payment.paid', 'payment.failed'].includes(eventType)) {
+      const handled = await handleWalletPaymentEvent(root?.data || root?.attributes?.data, livemode);
+      return res.status(200).json({ success: true, ignored: !handled });
+    }
     if (eventType !== 'checkout_session.payment.paid') {
       return res.status(200).json({ success: true, ignored: true });
     }

@@ -1,6 +1,7 @@
 const { dbAll, dbRun } = require('../db/database');
 const { completeWalletTopUp } = require('./walletLedger');
 const { retrieveCheckoutSession, getPaidPayment, isLiveMode } = require('./paymongo');
+const { reconcileWalletIntent } = require('./walletIntentPayments');
 
 async function settleWalletCheckout(session, eventLivemode) {
   const attrs = session?.attributes || {};
@@ -22,6 +23,7 @@ async function settleWalletCheckout(session, eventLivemode) {
 }
 
 async function reconcileWalletTopUp(transaction) {
+  if (transaction.payment_intent_id) return reconcileWalletIntent(transaction);
   if (transaction.status !== 'pending' || !transaction.checkout_session_id) return;
   const session = await retrieveCheckoutSession(transaction.checkout_session_id);
   if (session?.id !== transaction.checkout_session_id ||
@@ -42,9 +44,9 @@ async function reconcileWalletTopUp(transaction) {
 }
 
 async function reconcileRecentTopUps(userId) {
-  const pending = await dbAll(`SELECT transaction_id, checkout_session_id, status
+  const pending = await dbAll(`SELECT transaction_id, checkout_session_id, payment_intent_id, status
     FROM wallet_transactions WHERE user_id = $1 AND type = 'topup' AND status = 'pending'
-      AND checkout_session_id IS NOT NULL AND created_at > NOW() - INTERVAL '1 day'
+      AND (checkout_session_id IS NOT NULL OR payment_intent_id IS NOT NULL) AND created_at > NOW() - INTERVAL '1 day'
       AND updated_at < NOW() - INTERVAL '20 seconds'
     ORDER BY created_at DESC LIMIT 3`, [userId]);
   await Promise.all(pending.map(async (transaction) => {

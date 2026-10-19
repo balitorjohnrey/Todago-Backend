@@ -16,6 +16,7 @@ const {
   debitWalletForTrip,
 } = require('../services/walletLedger');
 const { settleWalletCheckout } = require('../services/walletPayments');
+const { handleWalletPaymentEvent } = require('../services/walletIntentPayments');
 
 const router = express.Router();
 const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
@@ -247,6 +248,10 @@ router.post('/paymongo/webhook', async (req, res) => {
     const eventType = root?.type === 'event'
       ? root?.attributes?.type
       : (root?.type || root?.attributes?.type);
+    if (['payment.paid', 'payment.failed'].includes(eventType)) {
+      const handled = await handleWalletPaymentEvent(root?.data || root?.attributes?.data, livemode);
+      return res.status(200).json({ success: true, ignored: !handled });
+    }
     if (eventType !== 'checkout_session.payment.paid') {
       return res.status(200).json({ success: true, ignored: true });
     }

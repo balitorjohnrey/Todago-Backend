@@ -120,6 +120,7 @@ test('PayMongo checkout and wallet safety', async (t) => {
   let serverSession = checkout();
   const writes = [];
   const payments = loadWith('src/services/walletPayments.js', {
+    './walletIntentPayments': {},
     '../db/database': { dbAll: async () => [], dbRun: async (sql) => writes.push(sql) },
     './walletLedger': { completeWalletTopUp: async (args) => { completed = args; return { updated: true }; } },
     './paymongo': { retrieveCheckoutSession: async () => serverSession,
@@ -165,6 +166,7 @@ test('PayMongo checkout and wallet safety', async (t) => {
       '../db/database': { dbGet: async (_sql, params) => { boundUser = params[1]; return null; } },
       '../services/paymongo': paymongo,
       '../services/walletLedger': {}, '../services/walletPayments': {},
+      '../services/walletIntentPayments': {},
     });
     const route = router.stack.find((layer) => layer.route?.path === '/top-ups/:transactionId').route;
     let status;

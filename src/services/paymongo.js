@@ -73,6 +73,48 @@ async function retrieveCheckoutSession(id) {
   return (await paymongoRequest(`/v1/checkout_sessions/${encodeURIComponent(id)}`)).data;
 }
 
+async function createWalletPaymentIntent({ transactionId, userId, amount, methodType }) {
+  if (!['gcash', 'paymaya', 'qrph'].includes(methodType)) throw new Error('Unsupported wallet payment');
+  const available = await getAvailablePaymentMethods();
+  if (!available.some((method) => method.type === methodType)) {
+    const error = new Error('This payment method is not available yet. Please choose another method.');
+    error.statusCode = 422;
+    throw error;
+  }
+  const centavos = toCentavos(amount);
+  if (!Number.isSafeInteger(centavos) || centavos < 100) throw new Error('Invalid payment amount');
+  return (await paymongoRequest('/v1/payment_intents', {
+    method: 'POST', idempotencyKey: `todago-intent-${transactionId}`,
+    body: { data: { attributes: {
+      amount: centavos, currency: 'PHP', payment_method_allowed: [methodType],
+      description: 'TodaGo wallet top-up',
+      metadata: { payment_type: 'wallet_topup', wallet_transaction_id: transactionId, user_id: userId },
+    } } },
+  })).data;
+}
+
+async function attachWalletPaymentMethod({ intentId, methodType, name, phone, transactionId }) {
+  if (!/^pi_[a-zA-Z0-9_-]+$/.test(intentId || '')) throw new Error('Invalid payment intent');
+  if (!['gcash', 'paymaya', 'qrph'].includes(methodType)) throw new Error('Unsupported wallet payment');
+  const method = (await paymongoRequest('/v1/payment_methods', {
+    method: 'POST', idempotencyKey: `todago-method-${transactionId}`,
+    body: { data: { attributes: { type: methodType,
+      billing: { name: name || 'TodaGo Passenger', ...(phone ? { phone } : {}) },
+    } } },
+  })).data;
+  return (await paymongoRequest(`/v1/payment_intents/${encodeURIComponent(intentId)}/attach`, {
+    method: 'POST', idempotencyKey: `todago-attach-${transactionId}`,
+    body: { data: { attributes: { payment_method: method.id,
+      return_url: `${getPublicBaseUrl()}/api/wallet/paymongo/return?transactionId=${encodeURIComponent(transactionId)}&status=success`,
+    } } },
+  })).data;
+}
+
+async function retrievePaymentIntent(id) {
+  if (!/^pi_[a-zA-Z0-9_-]+$/.test(id || '')) throw new Error('Invalid payment intent');
+  return (await paymongoRequest(`/v1/payment_intents/${encodeURIComponent(id)}`)).data;
+}
+
 function getPaidPayment(session) {
   const attrs = session?.attributes || {};
   const payments = [...(attrs.payments || []), ...(attrs.payment_intent?.attributes?.payments || [])];
@@ -239,4 +281,7 @@ module.exports = {
   retrieveCheckoutSession,
   getPaidPayment,
   isLiveMode,
+  createWalletPaymentIntent,
+  attachWalletPaymentMethod,
+  retrievePaymentIntent,
 };

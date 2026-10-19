@@ -109,24 +109,27 @@ async function debitWalletForTrip(trip) {
 async function completeWalletTopUp({
   transactionId,
   checkoutSessionId,
+  paymentIntentId,
   paymentId,
   amountInCentavos,
   currency,
 }) {
-  if (!checkoutSessionId || !paymentId || currency !== 'PHP' ||
+  if ((Boolean(checkoutSessionId) === Boolean(paymentIntentId)) || !paymentId || currency !== 'PHP' ||
       !Number.isSafeInteger(amountInCentavos) || amountInCentavos <= 0) {
     throw new Error('A verified PHP payment is required to complete a top-up');
   }
   const existing = await pool.query(
-    `SELECT transaction_id, user_id, amount, status, checkout_session_id
+    `SELECT transaction_id, user_id, amount, status, checkout_session_id, payment_intent_id
      FROM wallet_transactions
-     WHERE type = 'topup' AND ${transactionId ? 'transaction_id = $1' : 'checkout_session_id = $1'}`,
-    [transactionId || checkoutSessionId]
+     WHERE type = 'topup' AND ${transactionId ? 'transaction_id = $1' : paymentIntentId ? 'payment_intent_id = $1' : 'checkout_session_id = $1'}`,
+    [transactionId || paymentIntentId || checkoutSessionId]
   );
   const transaction = existing.rows[0];
   if (!transaction) throw new Error('Wallet top-up not found');
   if (Math.round(money(transaction.amount) * 100) !== amountInCentavos ||
-      (transaction.checkout_session_id && transaction.checkout_session_id !== checkoutSessionId)) {
+      (paymentIntentId
+        ? transaction.payment_intent_id !== paymentIntentId || Boolean(transaction.checkout_session_id)
+        : transaction.checkout_session_id !== checkoutSessionId || Boolean(transaction.payment_intent_id))) {
     throw new Error('Payment does not match the wallet top-up');
   }
   if (transaction.status === 'completed') return { updated: false, transaction };
@@ -134,15 +137,14 @@ async function completeWalletTopUp({
   const result = await pool.query(
     `UPDATE wallet_transactions
      SET status = 'completed',
-         checkout_session_id = COALESCE(checkout_session_id, $1),
          external_reference = COALESCE($2, external_reference),
          completed_at = COALESCE(completed_at, NOW()),
          updated_at = NOW()
       WHERE type = 'topup' AND status = 'pending'
         AND transaction_id = $3
-        AND (checkout_session_id IS NULL OR checkout_session_id = $1)
+        AND ${paymentIntentId ? 'payment_intent_id' : 'checkout_session_id'} = $1
      RETURNING transaction_id, user_id`,
-    [checkoutSessionId, paymentId, transaction.transaction_id]
+    [paymentIntentId || checkoutSessionId, paymentId, transaction.transaction_id]
   );
 
   return {

@@ -720,6 +720,13 @@ async function initializeDatabase() {
       `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS checkout_url TEXT`
     );
     await client.query(
+      `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS payment_intent_id TEXT`
+    );
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_transactions_payment_intent
+       ON wallet_transactions(payment_intent_id) WHERE payment_intent_id IS NOT NULL`
+    );
+    await client.query(
       `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`
     );
     await client.query(`ALTER TABLE wallet_transactions DROP CONSTRAINT IF EXISTS wallet_transactions_provider_check`);

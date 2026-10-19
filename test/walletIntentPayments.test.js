@@ -151,6 +151,16 @@ test('native wallet payments', async (t) => {
     }
   });
 
+  await t.test('a confirmed decline ends the attempt without crediting money', async () => {
+    completed = null;
+    writes.length = 0;
+    serverIntent = intent({ status: 'awaiting_payment_method', payments: [],
+      last_payment_error: { code: 'payment_failed' } });
+    await payments.reconcileWalletIntent(transaction);
+    assert.equal(completed, null);
+    assert.equal(writes.some(sql => sql.includes("status = 'failed'")), true);
+  });
+
   await t.test('a payment webhook looks up the stored intent and cannot create a new top-up', async () => {
     knownTransaction = null;
     completed = null;

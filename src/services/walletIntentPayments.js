@@ -28,6 +28,11 @@ async function reconcileWalletIntent(transaction) {
   } else if (attrs.status === 'cancelled') {
     await dbRun(`UPDATE wallet_transactions SET status = 'cancelled', updated_at = NOW()
       WHERE transaction_id = $1 AND status = 'pending'`, [transaction.transaction_id]);
+  } else if (attrs.status === 'awaiting_payment_method' && attrs.last_payment_error) {
+    // This flow attaches once per top-up. A confirmed decline ends that
+    // attempt; retries create a new top-up and a new intent.
+    await dbRun(`UPDATE wallet_transactions SET status = 'failed', updated_at = NOW()
+      WHERE transaction_id = $1 AND status = 'pending'`, [transaction.transaction_id]);
   } else {
     await dbRun(`UPDATE wallet_transactions SET updated_at = NOW()
       WHERE transaction_id = $1 AND status = 'pending'`, [transaction.transaction_id]);

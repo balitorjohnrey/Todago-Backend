@@ -32,6 +32,29 @@ const {
 } = require('./kyc');
 
 const router = express.Router();
+const { getDriverWallet, requestCashOut, cancelCashOut } = require('../services/driverWallet');
+
+router.get('/wallet', requireDriverAuth, async (req, res) => {
+  try { return res.json({ success: true, wallet: await getDriverWallet(req.driverId) }); }
+  catch (error) { return res.status(error.statusCode || 500).json({ success: false,
+    message: error.statusCode ? error.message : 'Unable to load driver wallet.' }); }
+});
+
+router.post('/wallet/cash-outs', requireDriverAuth, async (req, res) => {
+  try {
+    const request = await requestCashOut(req.driverId, req.body);
+    return res.status(201).json({ success: true, request,
+      message: 'Cash-out requested. TodaGo staff will send your e-wallet payment manually. Fee: PHP 0.' });
+  } catch (error) { return res.status(error.statusCode || 500).json({ success: false,
+    message: error.statusCode ? error.message : 'Unable to request cash-out. Refresh your requests before retrying.' }); }
+});
+
+router.post('/wallet/cash-outs/:cashoutId/cancel', requireDriverAuth, async (req, res) => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.cashoutId)) return res.status(422).json({ success: false, message: 'Invalid request.' });
+  try { return res.json({ success: true, request: await cancelCashOut(req.driverId, req.params.cashoutId) }); }
+  catch (error) { return res.status(error.statusCode || 500).json({ success: false,
+    message: error.statusCode ? error.message : 'Unable to cancel cash-out.' }); }
+});
 
 function generateDriverToken(driverId) {
   return jwt.sign({ sub: driverId, role: 'driver' }, process.env.JWT_SECRET, {

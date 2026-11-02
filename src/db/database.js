@@ -752,6 +752,36 @@ async function initializeDatabase() {
        WHERE trip_id IS NOT NULL AND type = 'trip' AND status <> 'failed'`
     );
 
+    // Manual driver e-wallet payouts. Pending/processing requests reserve funds.
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_earnings (
+      trip_id TEXT PRIMARY KEY REFERENCES trips(trip_id),
+      driver_id TEXT NOT NULL REFERENCES drivers(driver_id),
+      amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_earnings_driver ON driver_earnings(driver_id)`);
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_cashouts (
+      cashout_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      driver_id TEXT NOT NULL REFERENCES drivers(driver_id),
+      amount NUMERIC(10,2) NOT NULL CHECK (amount >= 50 AND amount <= 50000),
+      provider TEXT NOT NULL CHECK (provider IN ('gcash','maya')),
+      account_name TEXT NOT NULL,
+      account_number TEXT NOT NULL CHECK (account_number ~ '^09[0-9]{9}$'),
+      request_key UUID NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','paid','rejected','cancelled')),
+      payment_reference TEXT,
+      review_note TEXT,
+      reviewed_by TEXT,
+      paid_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (driver_id, request_key),
+      CHECK (status <> 'paid' OR (payment_reference IS NOT NULL AND paid_at IS NOT NULL))
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_cashouts_driver ON driver_cashouts(driver_id, created_at DESC)`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_cashouts_reference
+      ON driver_cashouts(provider, payment_reference) WHERE payment_reference IS NOT NULL`);
+
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS gps_locations (

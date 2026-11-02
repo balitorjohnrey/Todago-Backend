@@ -81,9 +81,9 @@ test('native wallet payments', async (t) => {
       },
       '../services/walletLedger': { getWalletBalance: async () => 0 },
       '../services/walletPayments': {},
-      '../services/walletIntentPayments': { walletIntentPresentation: () => ({ kind: 'redirect', provider: 'gcash' }) },
+      '../services/walletIntentPayments': { walletIntentPresentation: () => ({ kind: 'qr', provider: 'qrph' }) },
       '../services/paymongo': {
-        getAvailablePaymentMethods: async () => [{ id: 'gcash', type: 'gcash', label: 'GCash' }],
+        getAvailablePaymentMethods: async () => [{ id: 'qrph', type: 'qrph', label: 'QR Ph' }],
         isLiveMode: () => false,
         createWalletPaymentIntent: async () => { calls.push('intent'); return intent(); },
         attachWalletPaymentMethod: async () => { calls.push('attach'); if (attachFails) throw new Error('Provider timeout'); return intent(); },
@@ -94,14 +94,14 @@ test('native wallet payments', async (t) => {
     let response;
     let status;
     const res = { status: code => { status = code; return res; }, json: data => { response = data; return res; } };
-    const req = { userId: 'passenger-1', userRole: 'passenger', body: { provider: 'gcash', amount: 100, checkoutExperience: 'native' } };
+    const req = { userId: 'passenger-1', userRole: 'passenger', body: { provider: 'qrph', amount: 100, checkoutExperience: 'native' } };
     await route(req, res);
     assert.equal(status, 201);
-    assert.equal(response.payment.kind, 'redirect');
+    assert.equal(response.payment.kind, 'qr');
     assert.ok(calls.indexOf('persist') < calls.indexOf('attach'));
     assert.equal(calls.includes('hosted'), false);
     calls.length = 0;
-    await route({ ...req, body: { provider: 'gcash', amount: 100 } }, res);
+    await route({ ...req, body: { provider: 'qrph', amount: 100 } }, res);
     assert.equal(status, 201);
     assert.equal(response.checkoutUrl, 'https://checkout.paymongo.com/cs_example');
     assert.equal(calls.includes('hosted'), true);

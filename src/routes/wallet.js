@@ -19,6 +19,7 @@ const { settleWalletCheckout, reconcileWalletTopUp, reconcileRecentTopUps } = re
 const { walletIntentPresentation, handleWalletPaymentEvent } = require('../services/walletIntentPayments');
 
 const router = express.Router();
+const { MIN_TOP_UP, MAX_AMOUNT, amountInCentavos } = require('../services/paymentLimits');
 const PROVIDERS = ['gcash', 'maya'];
 
 function getPublicBaseUrl() {
@@ -55,7 +56,7 @@ function maskAccountNumber(raw) {
 }
 
 function requirePassenger(req, res) {
-  if (req.userRole === 'driver' || req.userRole === 'operator' || req.userRole === 'admin') {
+  if (!['passenger', 'commuter'].includes(req.userRole)) {
     res.status(403).json({ success: false, message: 'Passenger access only' });
     return false;
   }
@@ -244,8 +245,8 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/payment-methods', requireAuth, async (req, res) => {
   if (!requirePassenger(req, res)) return;
   try {
-    const methods = await getAvailablePaymentMethods();
-    return res.json({ success: true, methods, testMode: !isLiveMode(),
+    const methods = (await getAvailablePaymentMethods()).filter(method => method.id === 'qrph');
+    return res.json({ success: true, methods, minimumTopUp: MIN_TOP_UP, testMode: !isLiveMode(),
       message: methods.length ? null : 'No payment methods are available yet. Please try again later.' });
   } catch (error) {
     console.error('[Wallet] Payment methods:', error.message);
@@ -361,11 +362,11 @@ router.delete('/linked-accounts/:provider', requireAuth, [
 });
 
 router.post('/top-up', requireAuth, [
-  body('provider').isString().isLength({ min: 2, max: 50 }).withMessage('Choose a payment method'),
+  body('provider').equals('qrph').withMessage('Use QR Ph to pay with GCash, Maya or a supported bank'),
   body('checkoutExperience').optional().isIn(['native', 'hosted']).withMessage('Invalid checkout experience'),
   body('amount')
-    .isFloat({ min: 1, max: 50000 })
-    .withMessage('Top-up amount must be between PHP 1 and PHP 50,000'),
+    .custom(value => amountInCentavos(value, MIN_TOP_UP) !== null)
+    .withMessage(`Top-up amount must be between PHP ${MIN_TOP_UP} and PHP ${MAX_AMOUNT}, with at most two decimal places`),
 ], async (req, res) => {
   if (!requirePassenger(req, res)) return;
   const errors = validationResult(req);
@@ -375,6 +376,9 @@ router.post('/top-up', requireAuth, [
 
   const provider = req.body.provider;
   const amount = toAmount(req.body.amount);
+  if (provider !== 'qrph' || amountInCentavos(req.body.amount, MIN_TOP_UP) === null) {
+    return res.status(422).json({ success: false, message: 'Choose QR Ph and a top-up of at least PHP 20.' });
+  }
 
   try {
     const methods = await getAvailablePaymentMethods();

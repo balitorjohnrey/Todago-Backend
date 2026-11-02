@@ -1,6 +1,8 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
 const {
@@ -9,6 +11,7 @@ const {
 } = require('../utils/peakHourAnalytics');
 
 const router = express.Router();
+const { reviewCashOut } = require('../services/driverWallet');
 const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
 
 function isExternalKycProvider(provider) {
@@ -21,8 +24,12 @@ function adminSecret() {
     || 'todago-admin-2026';
 }
 
-function generateAdminToken() {
-  return jwt.sign({ sub: 'todago-admin', role: 'admin' }, process.env.JWT_SECRET, {
+function payoutSecret() { return (process.env.PAYOUT_ADMIN_SECRET || '').trim(); }
+function payoutVersion() { return crypto.createHash('sha256').update(payoutSecret()).digest('hex').slice(0, 24); }
+
+function generateAdminToken(role = 'admin') {
+  return jwt.sign({ sub: role === 'payout_admin' ? 'todago-payout-admin' : 'todago-admin', role,
+    ...(role === 'payout_admin' ? { payoutVersion: payoutVersion() } : {}) }, process.env.JWT_SECRET, {
     expiresIn: process.env.ADMIN_JWT_EXPIRES_IN || '12h',
     issuer: 'todago-api',
     audience: 'todago-app',
@@ -43,11 +50,46 @@ function requireAdminAuth(req, res, next) {
     if (payload.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Admin access only' });
     }
+    req.adminId = payload.sub;
     next();
   } catch {
     return res.status(401).json({ success: false, message: 'Invalid or expired admin token' });
   }
 }
+
+function requirePayoutAdmin(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) return res.status(401).json({ success: false, message: 'Payout admin login required.' });
+  try {
+    const payload = jwt.verify(auth.slice(7), process.env.JWT_SECRET, { issuer: 'todago-api', audience: 'todago-app' });
+    if (payload.role !== 'payout_admin') return res.status(403).json({ success: false, message: 'Payout admin access only.' });
+    if (!payoutSecret() || payoutSecret() === adminSecret() || payload.payoutVersion !== payoutVersion()) {
+      return res.status(401).json({ success: false, message: 'Payout admin access changed. Sign in again.' });
+    }
+    req.adminId = payload.sub;
+    next();
+  } catch { return res.status(401).json({ success: false, message: 'Invalid or expired payout admin token.' }); }
+}
+
+router.get('/driver-cashouts', requirePayoutAdmin, async (req, res) => {
+  try {
+    const history = req.query.view === 'history';
+    const requests = await dbAll(`SELECT co.*, d.driver_name FROM driver_cashouts co
+      JOIN drivers d ON d.driver_id = co.driver_id
+      WHERE ${history ? "co.status IN ('paid','rejected','cancelled')" : "co.status IN ('pending','processing')"}
+      ORDER BY CASE co.status WHEN 'processing' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
+        co.updated_at DESC LIMIT 100`);
+    return res.json({ success: true, requests, payoutMode: 'manual', driverFee: 0 });
+  } catch { return res.status(500).json({ success: false, message: 'Unable to load cash-outs.' }); }
+});
+
+router.post('/driver-cashouts/:cashoutId/review', requirePayoutAdmin, async (req, res) => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.cashoutId)) return res.status(422).json({ success: false, message: 'Invalid request.' });
+  try { return res.json({ success: true, request: await reviewCashOut(req.params.cashoutId,
+    { ...req.body, adminId: req.adminId }) }); }
+  catch (error) { return res.status(error.statusCode || 500).json({ success: false,
+    message: error.statusCode ? error.message : 'Unable to update cash-out. Refresh before retrying.' }); }
+});
 
 function sanitizeDriver(row) {
   if (!row) return row;
@@ -55,7 +97,9 @@ function sanitizeDriver(row) {
   return safe;
 }
 
-router.post('/login', [
+router.post('/login', rateLimit({ windowMs: 15 * 60 * 1000, limit: 20,
+  standardHeaders: 'draft-7', legacyHeaders: false,
+  message: { success: false, message: 'Too many admin login attempts. Try again later.' } }), [
   body('secret').trim().notEmpty().withMessage('Admin secret is required'),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -63,7 +107,8 @@ router.post('/login', [
     return res.status(422).json({ success: false, message: errors.array()[0].msg });
   }
 
-  if (req.body.secret !== adminSecret()) {
+  const isPayoutAdmin = payoutSecret() && payoutSecret() !== adminSecret() && req.body.secret === payoutSecret();
+  if (!isPayoutAdmin && req.body.secret !== adminSecret()) {
     return res.status(401).json({
       success: false,
       message: 'Invalid admin secret',
@@ -73,10 +118,10 @@ router.post('/login', [
   return res.json({
     success: true,
     message: 'Admin login successful',
-    token: generateAdminToken(),
+    token: generateAdminToken(isPayoutAdmin ? 'payout_admin' : 'admin'),
     admin: {
-      role: 'admin',
-      name: process.env.ADMIN_DISPLAY_NAME || 'TodaGo Admin',
+      role: isPayoutAdmin ? 'payout_admin' : 'admin',
+      name: isPayoutAdmin ? 'TodaGo Payout Admin' : process.env.ADMIN_DISPLAY_NAME || 'TodaGo Admin',
     },
   });
 });

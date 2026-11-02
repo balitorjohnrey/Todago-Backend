@@ -25,7 +25,10 @@ function adminSecret() {
 }
 
 function payoutSecret() { return (process.env.PAYOUT_ADMIN_SECRET || '').trim(); }
-function payoutVersion() { return crypto.createHash('sha256').update(payoutSecret()).digest('hex').slice(0, 24); }
+function payoutVersion() {
+  // A keyed tag revokes sessions on rotation without exposing a password hash.
+  return crypto.createHmac('sha256', process.env.JWT_SECRET).update(payoutSecret()).digest('hex').slice(0, 24);
+}
 
 function generateAdminToken(role = 'admin') {
   return jwt.sign({ sub: role === 'payout_admin' ? 'todago-payout-admin' : 'todago-admin', role,

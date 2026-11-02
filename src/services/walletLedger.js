@@ -1,4 +1,5 @@
 const { pool } = require('../db/database');
+const { amountInCentavos } = require('./paymentLimits');
 
 function money(value) {
   const parsed = Number.parseFloat(value);
@@ -19,8 +20,7 @@ async function getWalletBalance(userId, client = pool) {
 }
 
 async function debitWalletForTrip(trip) {
-  const amount = money(trip.fare);
-  if (!trip?.commuter_id || !trip?.trip_id || amount <= 0) {
+  if (!trip?.commuter_id || !trip?.trip_id) {
     return { success: false, message: 'Invalid wallet payment request' };
   }
 
@@ -28,34 +28,68 @@ async function debitWalletForTrip(trip) {
   try {
     await client.query('BEGIN');
 
+    // Serialize all spending by this passenger, including different trips.
+    // Re-read the fare and payment state after locking: the route's snapshot
+    // may have changed while a concurrent request was in flight.
+    const passenger = await client.query(
+      'SELECT id FROM users WHERE id = $1 AND is_active = true FOR UPDATE',
+      [trip.commuter_id]
+    );
+    const current = await client.query(
+      'SELECT * FROM trips WHERE trip_id = $1 FOR UPDATE', [trip.trip_id]
+    );
+    const payable = current.rows[0];
+    if (!passenger.rows[0] || !payable || payable.commuter_id !== trip.commuter_id) {
+      await client.query('ROLLBACK');
+      return { success: false, message: 'Passenger or trip unavailable' };
+    }
+    const cents = amountInCentavos(payable.fare, 0.01);
+    if (cents === null || !payable.driver_id || payable.status === 'cancelled') {
+      await client.query('ROLLBACK');
+      return { success: false, message: 'This trip cannot be paid from TodaGo Wallet' };
+    }
+    const amount = cents / 100;
+
     const existing = await client.query(
       `SELECT transaction_id
        FROM wallet_transactions
        WHERE trip_id = $1
+         AND user_id = $2 AND amount = $3 AND direction = 'debit'
          AND type = 'trip'
          AND status = 'completed'
        LIMIT 1`,
-      [trip.trip_id]
+      [trip.trip_id, trip.commuter_id, amount]
     );
     if (existing.rows[0]) {
       await client.query(
         `UPDATE trips
          SET payment_status = 'paid',
+             payment_method = 'wallet',
+             paymongo_checkout_session_id = NULL,
+             paymongo_checkout_url = NULL,
+             paymongo_payment_id = NULL,
              payment_reference = COALESCE(payment_reference, $1),
              payment_collected_at = COALESCE(payment_collected_at, NOW())
          WHERE trip_id = $2`,
         [`wallet:${existing.rows[0].transaction_id}`, trip.trip_id]
       );
+      const balance = await getWalletBalance(trip.commuter_id, client);
       await client.query('COMMIT');
       return {
         success: true,
         transactionId: existing.rows[0].transaction_id,
-        balance: await getWalletBalance(trip.commuter_id),
+        balance,
       };
     }
 
+    if (payable.status !== 'arrived' || payable.payment_status === 'paid' || payable.paymongo_checkout_session_id) {
+      await client.query('ROLLBACK');
+      return { success: false, message: 'Payment is already settled or this trip is not ready for payment' };
+    }
+
     const balance = await getWalletBalance(trip.commuter_id, client);
-    if (balance < amount) {
+    const balanceCents = Math.round(balance * 100);
+    if (balanceCents < cents) {
       await client.query('ROLLBACK');
       return {
         success: false,
@@ -65,7 +99,7 @@ async function debitWalletForTrip(trip) {
       };
     }
 
-    const title = `TodaGo ride to ${trip.destination || 'destination'}`;
+    const title = `TodaGo ride to ${payable.destination || 'destination'}`;
     const inserted = await client.query(
       `INSERT INTO wallet_transactions
         (user_id, trip_id, type, provider, direction, amount, status,
@@ -86,6 +120,10 @@ async function debitWalletForTrip(trip) {
     await client.query(
       `UPDATE trips
        SET payment_status = 'paid',
+           payment_method = 'wallet',
+           paymongo_checkout_session_id = NULL,
+           paymongo_checkout_url = NULL,
+           paymongo_payment_id = NULL,
            payment_reference = $1,
            payment_collected_at = COALESCE(payment_collected_at, NOW())
        WHERE trip_id = $2`,
@@ -96,7 +134,7 @@ async function debitWalletForTrip(trip) {
     return {
       success: true,
       transactionId,
-      balance: balance - amount,
+      balance: (balanceCents - cents) / 100,
     };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});

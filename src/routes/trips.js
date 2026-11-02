@@ -17,6 +17,7 @@ const {
 } = require('../services/walletLedger');
 const { settleWalletCheckout } = require('../services/walletPayments');
 const { handleWalletPaymentEvent } = require('../services/walletIntentPayments');
+const { completePaidTrip } = require('../services/tripPayments');
 
 const router = express.Router();
 const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
@@ -103,33 +104,7 @@ function formatPaymentMethod(value) {
 }
 
 async function finalizeTripPayment(trip, driverId) {
-  await dbRun(
-    `UPDATE trips
-     SET status = 'completed',
-         end_timestamp = COALESCE(end_timestamp, NOW()),
-         payment_status = 'paid',
-         payment_collected_at = COALESCE(payment_collected_at, NOW())
-     WHERE trip_id = $1`,
-    [trip.trip_id]
-  );
-
-  if (trip.status !== 'completed') {
-    await dbRun(
-      `UPDATE drivers
-       SET total_trips = total_trips + 1,
-           status      = 'online',
-           online_since = COALESCE(online_since, NOW()),
-           updated_at  = NOW()
-       WHERE driver_id = $1`,
-      [driverId || trip.driver_id]
-    );
-  }
-
-  const grossFare = parseFloat(trip.fare) || 0;
-  return {
-    gross_fare: grossFare,
-    your_earnings: grossFare,
-  };
+  return completePaidTrip(trip.trip_id, driverId || trip.driver_id);
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -707,16 +682,28 @@ router.put('/:tripId/payment-method', requireAuth, [
       return res.status(409).json({ success: false, message: 'Payment method can no longer be changed' });
     }
 
+    const pendingCheckout = await dbGet(
+      `SELECT paymongo_checkout_session_id FROM trips WHERE trip_id = $1`, [trip.trip_id]
+    );
+    if (pendingCheckout?.paymongo_checkout_session_id) {
+      return res.status(409).json({ success: false, message: 'Finish the existing provider checkout before changing payment method. Contact support if you cannot continue.' });
+    }
+
     const paymentMethod = normalizePaymentMethod(req.body.paymentMethod);
-    await dbRun(
+    const changed = await dbRun(
       `UPDATE trips
        SET payment_method = $1,
            payment_status = 'unpaid',
            paymongo_checkout_session_id = NULL,
            paymongo_checkout_url = NULL
-       WHERE trip_id = $2`,
+       WHERE trip_id = $2 AND status NOT IN ('completed','cancelled')
+         AND payment_status IS DISTINCT FROM 'paid'
+         AND paymongo_checkout_session_id IS NULL`,
       [paymentMethod, trip.trip_id]
     );
+    if (!changed.rowCount) {
+      return res.status(409).json({ success: false, message: 'Payment method can no longer be changed. Refresh your trip.' });
+    }
     const updated = await dbGet(`SELECT * FROM trips WHERE trip_id = $1`, [trip.trip_id]);
     return res.json({
       success: true,
@@ -776,6 +763,9 @@ router.post('/:tripId/payment/checkout', requireAuth, [
     }
 
     if (paymentMethod === 'wallet') {
+      if (trip.paymongo_checkout_session_id) {
+        return res.status(409).json({ success: false, message: 'A provider checkout is already open. Complete that payment or contact support.' });
+      }
       const walletPayment = await debitWalletForTrip(trip);
       if (!walletPayment.success) {
         return res.status(409).json(walletPayment);
@@ -792,6 +782,14 @@ router.post('/:tripId/payment/checkout', requireAuth, [
       });
     }
 
+    if (trip.paymongo_checkout_session_id) {
+      if (paymentMethod !== trip.payment_method) {
+        return res.status(409).json({ success: false, message: 'A checkout is already open for another payment method.' });
+      }
+      return res.json({ success: true, checkoutSessionId: trip.paymongo_checkout_session_id,
+        checkoutUrl: trip.paymongo_checkout_url, trip });
+    }
+
     const session = await createCheckoutSession({
       tripId: trip.trip_id,
       amount: trip.fare,
@@ -802,15 +800,21 @@ router.post('/:tripId/payment/checkout', requireAuth, [
     });
     const checkoutUrl = session.attributes?.checkout_url;
 
-    await dbRun(
+    const saved = await dbRun(
       `UPDATE trips
        SET payment_method = $1,
            payment_status = 'pending',
            paymongo_checkout_session_id = $2,
            paymongo_checkout_url = $3
-       WHERE trip_id = $4`,
-      [paymentMethod, session.id, checkoutUrl, trip.trip_id]
+       WHERE trip_id = $4 AND status = 'arrived'
+         AND payment_status IS DISTINCT FROM 'paid'
+         AND payment_method = $5
+         AND paymongo_checkout_session_id IS NOT DISTINCT FROM $6`,
+      [paymentMethod, session.id, checkoutUrl, trip.trip_id, trip.payment_method, trip.paymongo_checkout_session_id]
     );
+    if (!saved.rowCount) {
+      return res.status(409).json({ success: false, message: 'Trip payment changed. Refresh before trying again.' });
+    }
     const updated = await dbGet(`SELECT * FROM trips WHERE trip_id = $1`, [trip.trip_id]);
 
     return res.json({
@@ -869,17 +873,7 @@ router.post('/:tripId/payment/collect', requireAuth, async (req, res) => {
       return res.status(409).json({ success: false, message: 'Mark arrived at destination before collecting payment' });
     }
 
-    if (trip.payment_method === 'cash') {
-      await dbRun(
-        `UPDATE trips
-         SET payment_status = 'paid',
-             payment_reference = COALESCE(payment_reference, $1),
-             payment_collected_at = COALESCE(payment_collected_at, NOW())
-         WHERE trip_id = $2`,
-        [`cash:${trip.trip_id}`, trip.trip_id]
-      );
-      trip.payment_status = 'paid';
-    } else if (trip.payment_status !== 'paid') {
+    if (trip.payment_method !== 'cash' && trip.payment_status !== 'paid') {
       return res.status(409).json({
         success: false,
         message: `Waiting for ${formatPaymentMethod(trip.payment_method)} payment from passenger.`,
@@ -895,7 +889,7 @@ router.post('/:tripId/payment/collect', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('[Trips] Collect payment error:', err.message);
-    return res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(err.statusCode || 500).json({ success: false, message: err.statusCode ? err.message : 'Server error' });
   }
 });
 
@@ -940,13 +934,17 @@ router.put('/:tripId/status', requireAuth, [
         return res.status(409).json({ success: false, message: 'Completed trips cannot be cancelled' });
       }
 
-      await dbRun(
+      const cancelled = await dbRun(
         `UPDATE trips
          SET status = 'cancelled',
              end_timestamp = COALESCE(end_timestamp, NOW())
-         WHERE trip_id = $1`,
+         WHERE trip_id = $1 AND status NOT IN ('completed','cancelled')
+           AND payment_status IS DISTINCT FROM 'paid'`,
         [trip.trip_id]
       );
+      if (!cancelled.rowCount) {
+        return res.status(409).json({ success: false, message: 'Paid or finished trips cannot be cancelled. Contact support for a payment issue.' });
+      }
 
       if (trip.driver_id) {
         await dbRun(
@@ -1012,49 +1010,26 @@ router.put('/:tripId/status', requireAuth, [
       });
     }
 
-    await dbRun(
+    if (status === 'completed') {
+      const earnings = await finalizeTripPayment(trip, req.userId);
+      return res.json({ success: true, message: 'Trip completed!', earnings });
+    }
+
+    const changed = await dbRun(
       `UPDATE trips
        SET status = $1
-           ${status === 'completed' ? ", end_timestamp = NOW(), payment_status = CASE WHEN payment_method = 'cash' THEN 'paid' ELSE payment_status END, payment_collected_at = CASE WHEN payment_method = 'cash' THEN COALESCE(payment_collected_at, NOW()) ELSE payment_collected_at END" : ''}
-       WHERE trip_id = $2`,
-      [status, req.params.tripId]
+       WHERE trip_id = $2 AND status = $3
+         AND payment_status IS NOT DISTINCT FROM $4`,
+      [status, req.params.tripId, trip.status, trip.payment_status]
     );
-
-    if (status === 'completed') {
-      const trip = await dbGet(
-        `SELECT * FROM trips WHERE trip_id = $1`, [req.params.tripId]
-      );
-
-      if (trip && req.userRole === 'driver') {
-        const grossFare = parseFloat(trip.fare);
-
-        await dbRun(
-          `UPDATE drivers
-           SET total_trips = total_trips + 1,
-               status      = 'online',
-               online_since = COALESCE(online_since, NOW()),
-               updated_at  = NOW()
-           WHERE driver_id = $1`,
-          [req.userId]
-        );
-
-        console.log(`[Trips] Completed: fare=${grossFare}`);
-
-        return res.json({
-          success: true,
-          message: 'Trip completed!',
-          earnings: {
-            gross_fare: grossFare,
-            your_earnings: grossFare,
-          },
-        });
-      }
+    if (!changed.rowCount) {
+      return res.status(409).json({ success: false, message: 'Trip changed. Refresh before trying again.' });
     }
 
     return res.json({ success: true, message: `Status updated to ${status}` });
   } catch (err) {
     console.error('[Trips] Status update error:', err.message);
-    return res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(err.statusCode || 500).json({ success: false, message: err.statusCode ? err.message : 'Server error' });
   }
 });
 

@@ -138,4 +138,4 @@ async function reviewCashOut(cashoutId, { action, reference, note, adminId, conf
   } finally { client.release(); }
 }
 
-module.exports = { getDriverWallet, requestCashOut, cancelCashOut, reviewCashOut };
+module.exports = { getDriverWallet, requestCashOut, cancelCashOut, reviewCashOut, syncEarnings };

@@ -89,4 +89,12 @@ API:
 
 Driver earnings are inserted once per completed, paid cashless trip, requiring the matching completed passenger-wallet debit or a PayMongo payment ID. Cash trips and unconfirmed trips are excluded. Amounts are reserved using a driver-row database lock; duplicate references are rejected by a unique index. The current fare share remains 100% of the fare, matching the app's existing earnings calculation; TodaGo covers processing costs separately.
 
+## Passenger wallet fare payment
+
+After destination arrival, the passenger selects TodaGo Wallet on the live trip screen and pays from their confirmed wallet balance. Payment debits the exact stored fare and marks the trip paid. The driver then chooses Collect Payment to finish the ride. Completion and the driver earning are committed together, so a credit failure leaves the ride ready to retry without charging the passenger again. The driver wallet refreshes every five seconds while open and reloads on app resume; this is polling, not an instantaneous push notification.
+
+Passenger-row locks serialize wallet spending across different trips. Trip locks and fresh reads protect the fare, payer, payment state and duplicate retries. A paid trip cannot have its payment method reset or be cancelled through the ordinary cancellation endpoint. Repeated driver completion cannot increment trip counts or credit earnings twice. Cash already collected is excluded from the digital wallet. Older confirmed cashless trips are also reconciled when the driver wallet is opened.
+
+`npm test` includes an isolated transactional adapter covering the actual passenger checkout, driver collection, ledger and payout services together. It tests concurrency, insufficient funds, exact amounts, ownership, duplicate completion, cancellation/payment-method races, cash exclusion, shared drop-offs, payment proof and rollback on an earnings write failure. These automated tests do not connect to the production database or transfer money. Physical-device checkout and live provider settlement remain separate acceptance checks.
+
 Registration of the new driver_earnings and driver_cashouts tables is automatic on backend startup. No balances, payments or cash-out records are fabricated for the defense. Cash-out creation is disabled while the payment backend uses test keys. Use an isolated database for any simulated top-ups and never carry test credits into production.

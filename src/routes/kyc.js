@@ -155,11 +155,21 @@ function statusFromDidit(status) {
 
 function publicKycPayload(kyc) {
   if (!kyc) return null;
+  const target = parseReferenceId(kyc.referenceId);
+  const sessionId = kyc.sessionId || kyc.inquiryId;
+  // Pending accounts can read this session's status without a login token.
+  const statusToken = target && sessionId ? jwt.sign({
+    sub: target.id, role: target.role, provider: kyc.provider, sessionId,
+  }, process.env.JWT_SECRET, {
+    issuer: 'todago-api', audience: 'todago-kyc-status', expiresIn: '2h',
+  }) : null;
   return {
     provider: kyc.provider,
     inquiryId: kyc.inquiryId,
     sessionId: kyc.sessionId,
     verificationUrl: kyc.verificationUrl,
+    callbackUrl: kyc.callbackUrl,
+    statusToken,
     status: kyc.status,
     rawStatus: kyc.rawStatus,
   };
@@ -322,6 +332,7 @@ async function createKycVerification({
       workflowId: didit.workflowId,
       referenceId: didit.referenceId,
       verificationUrl: didit.verificationUrl,
+      callbackUrl: didit.callbackUrl,
       status: statusFromDidit(didit.status),
       rawStatus: didit.status,
     };
@@ -472,6 +483,37 @@ async function startVerification(req, res, providerOverride = null) {
     });
   }
 }
+
+router.get('/session/status', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  let payload;
+  try {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith('Bearer ')) throw new Error('Missing token');
+    payload = jwt.verify(auth.slice(7), process.env.JWT_SECRET, {
+      issuer: 'todago-api', audience: 'todago-kyc-status', algorithms: ['HS256'],
+    });
+    if (!ROLE_TABLES[payload.role] || !EXTERNAL_KYC_PROVIDERS.has(payload.provider)
+      || !payload.sub || !payload.sessionId) throw new Error('Invalid scope');
+  } catch {
+    return res.status(401).json({ success: false, message: 'Invalid or expired verification token' });
+  }
+  try {
+    const account = await loadAccount(payload.role, payload.sub);
+    const column = payload.provider === 'didit' ? 'didit_session_id' : 'persona_inquiry_id';
+    if (!account || account.identity_provider !== payload.provider
+      || account[column] !== payload.sessionId) {
+      return res.status(404).json({ success: false, message: 'Verification session is no longer active' });
+    }
+    return res.json({ success: true, identity: {
+      status: account.identity_verification_status,
+      isVerified: account.identity_is_verified === true,
+    } });
+  } catch (error) {
+    console.error('[KYC] Session status error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to load identity status' });
+  }
+});
 
 router.get('/status', requireRoleAuth, async (req, res) => {
   try {

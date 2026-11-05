@@ -67,14 +67,33 @@ router.post('/', requireAnyAuth, [
 
   try {
     const reporterName = await actorName(req.actorRole, req.actorId);
+    let subjectRole = req.body.subjectRole || null;
+    let subjectId = req.body.subjectId || null;
+    let subjectName = req.body.subjectName || null;
+    if (req.body.tripId) {
+      const trip = await dbGet(
+        'SELECT commuter_id, driver_id FROM trips WHERE trip_id = $1',
+        [req.body.tripId]
+      );
+      const isDriver = req.actorRole === 'driver' && trip?.driver_id === req.actorId;
+      const isPassenger = req.actorRole === 'passenger' && trip?.commuter_id === req.actorId;
+      if (['driver', 'passenger'].includes(req.actorRole)) {
+        if (!isDriver && !isPassenger) {
+          return res.status(403).json({ success: false, message: 'You can only report an incident on your own trip.' });
+        }
+        subjectRole = isDriver ? 'passenger' : 'driver';
+        subjectId = isDriver ? trip.commuter_id : trip.driver_id;
+        subjectName = await actorName(subjectRole, subjectId);
+      }
+    }
     const report = await createIssueReport({
       reporterRole: req.actorRole,
       reporterId: req.actorId,
       reporterName,
       reportType: req.body.reportType.trim(),
-      subjectRole: req.body.subjectRole || null,
-      subjectId: req.body.subjectId || null,
-      subjectName: req.body.subjectName || null,
+      subjectRole,
+      subjectId,
+      subjectName,
       tripId: req.body.tripId || null,
       title: req.body.title.trim(),
       details: req.body.details ? req.body.details.trim() : null,

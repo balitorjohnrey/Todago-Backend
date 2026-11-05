@@ -194,6 +194,7 @@ test('payout login uses a separate role and secret, denied access to the main ad
   try {
     const queries=[];
     const router=loadWith('src/routes/admin_auth.js', {
+      '../services/reportPenalties': {},
       '../db/database': {dbAll:async sql=>{queries.push(sql);return [];}}, '../utils/routeAnalytics': {}, '../utils/peakHourAnalytics': {}, '../services/driverWallet': {},
     });
     const route=router.stack.find(layer=>layer.route?.path==='/driver-cashouts').route;

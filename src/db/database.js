@@ -909,6 +909,22 @@ async function initializeDatabase() {
       `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ`
     );
     await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS penalty_severity TEXT
+       CHECK (penalty_severity IN ('standard','severe'))`
+    );
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS penalty_minutes INTEGER
+       CHECK (penalty_minutes IN (30,60,1440,2880))`
+    );
+    await client.query(
+      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS restriction_until TIMESTAMPTZ`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_issue_reports_active_restriction
+       ON issue_reports(subject_id, subject_role, restriction_until)
+       WHERE status IN ('validated','resolved') AND restriction_until IS NOT NULL`
+    );
+    await client.query(
       `CREATE INDEX IF NOT EXISTS idx_issue_reports_status_created
        ON issue_reports(status, created_at DESC)`
     );

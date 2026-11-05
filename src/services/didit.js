@@ -140,10 +140,8 @@ async function createDiditSession({ role, entityId, fullName, email, phone }) {
     },
   };
 
-  const callbackUrl = clean(process.env.DIDIT_CALLBACK_URL);
-  if (callbackUrl) {
-    body.callback = callbackUrl;
-  }
+  const callbackUrl = clean(process.env.DIDIT_CALLBACK_URL) || 'todago://kyc-complete';
+  body.callback = callbackUrl;
 
   const contactDetails = {};
   if (clean(email)) contactDetails.email = clean(email).toLowerCase();
@@ -195,6 +193,7 @@ async function createDiditSession({ role, entityId, fullName, email, phone }) {
     referenceId: payload.vendor_data || referenceId,
     status: payload.status || 'Not Started',
     verificationUrl: payload.url || null,
+    callbackUrl,
   };
 }
 

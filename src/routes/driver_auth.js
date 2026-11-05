@@ -18,6 +18,7 @@ const {
   validatePasswordStrength,
 } = require('../utils/password');
 const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
+const { getRideRestriction, restrictionResponse } = require('../services/reportPenalties');
 const {
   pickIdentityPayload,
   validateIdentityPayload,
@@ -722,7 +723,11 @@ router.get('/me', requireDriverAuth, async (req, res) => {
       [req.driverId]
     );
     if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
-    return res.json({ success: true, driver: sanitizeDriver(driver) });
+    const restriction = await getRideRestriction('driver', req.driverId);
+    return res.json({ success: true, driver: {
+      ...sanitizeDriver(driver),
+      ride_restriction: restriction ? restrictionResponse('driver', restriction) : null,
+    } });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Server error' });
   }
@@ -822,6 +827,8 @@ router.get('/stats/today', requireDriverAuth, async (req, res) => {
       [req.driverId]
     );
     if (!stats) return res.status(404).json({ success: false, message: 'Driver not found' });
+    const restriction = await getRideRestriction('driver', req.driverId);
+    stats.ride_restriction = restriction ? restrictionResponse('driver', restriction) : null;
     return res.json({ success: true, stats });
   } catch (error) {
     console.error('[Driver] Today stats error:', error.message);
@@ -868,6 +875,8 @@ router.put('/status', requireDriverAuth, [
   }
   try {
     if (req.body.status !== 'offline') {
+      const restriction = await getRideRestriction('driver', req.driverId);
+      if (restriction) return res.status(403).json(restrictionResponse('driver', restriction));
       const driver = await dbGet(
         `SELECT d.toda_id, d.is_verified, ta.association_name
          FROM drivers d

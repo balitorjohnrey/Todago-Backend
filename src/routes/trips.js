@@ -7,6 +7,7 @@ const jwt     = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
+const { getRideRestriction, restrictionResponse } = require('../services/reportPenalties');
 const {
   createCheckoutSession,
   verifyWebhookSignature,
@@ -163,6 +164,11 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
        WHERE d.status    = 'online'
          AND d.is_active = true
          AND d.is_verified = true
+         AND NOT EXISTS (
+           SELECT 1 FROM issue_reports ir
+           WHERE ir.subject_role = 'driver' AND ir.subject_id = d.driver_id
+             AND ir.status IN ('validated','resolved') AND ir.restriction_until > NOW()
+         )
        ORDER BY gps.timestamp IS NULL ASC, d.avg_rating DESC`,
       []
     );
@@ -419,6 +425,18 @@ router.post('/request', requireAuth, [
     const scheduledDate = scheduledPickupAt ? new Date(scheduledPickupAt) : null;
     const isScheduled = !!scheduledDate;
 
+    const passengerRestriction = await getRideRestriction('passenger', req.userId);
+    if (passengerRestriction) {
+      return res.status(403).json(restrictionResponse('passenger', passengerRestriction));
+    }
+    const driverRestriction = await getRideRestriction('driver', driverId);
+    if (driverRestriction) {
+      return res.status(403).json({
+        ...restrictionResponse('driver', driverRestriction),
+        message: 'This driver is temporarily suspended from accepting rides. Please choose another driver.',
+      });
+    }
+
     if (isScheduled && scheduledDate.getTime() <= Date.now() + 5 * 60 * 1000) {
       return res.status(422).json({
         success: false,
@@ -565,6 +583,8 @@ router.get('/driver/pending', requireAuth, async (req, res) => {
     return res.status(403).json({ success: false, message: 'Driver access only' });
   }
   try {
+    const restriction = await getRideRestriction('driver', req.userId);
+    if (restriction) return res.status(403).json(restrictionResponse('driver', restriction));
     const trip = await dbGet(
       `SELECT tr.*,
               COALESCE(u.full_name, 'Passenger') AS commuter_name,
@@ -600,6 +620,8 @@ router.put('/:tripId/accept', requireAuth, async (req, res) => {
     return res.status(403).json({ success: false, message: 'Driver access only' });
   }
   try {
+    const restriction = await getRideRestriction('driver', req.userId);
+    if (restriction) return res.status(403).json(restrictionResponse('driver', restriction));
     const trip = await dbGet(
       `SELECT * FROM trips
        WHERE trip_id = $1 AND driver_id = $2 AND status IN ('requested','scheduled')`,
@@ -972,6 +994,13 @@ router.put('/:tripId/status', requireAuth, [
 
     if (!isAssignedDriver) {
       return res.status(403).json({ success: false, message: 'Only the assigned driver can update this trip' });
+    }
+
+    // A pending request cannot bypass suspension by skipping the accept endpoint.
+    // Trips already accepted can still be finished or cancelled.
+    if (['requested', 'scheduled'].includes(trip.status)) {
+      const restriction = await getRideRestriction('driver', req.userId);
+      if (restriction) return res.status(403).json(restrictionResponse('driver', restriction));
     }
 
     if (trip.status === 'cancelled' || trip.status === 'completed') {

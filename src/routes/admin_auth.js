@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { dbRun, dbGet, dbAll } = require('../db/database');
+const { reviewIssueReport } = require('../services/reportPenalties');
 const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
 const {
   clampInt: clampPeakInt,
@@ -226,6 +227,10 @@ router.patch('/reports/:issueId/status', requireAdminAuth, [
   body('status')
     .isIn(['pending','validated','rejected','resolved'])
     .withMessage('Invalid report status'),
+  body('penaltySeverity')
+    .optional()
+    .isIn(['standard', 'severe'])
+    .withMessage('Choose standard or severe incident severity'),
   body('adminNotes')
     .optional({ nullable: true })
     .isString()
@@ -239,66 +244,23 @@ router.patch('/reports/:issueId/status', requireAdminAuth, [
   }
 
   try {
-    const report = await dbGet(
-      `SELECT *
-       FROM issue_reports
-       WHERE issue_id = $1`,
-      [req.params.issueId]
-    );
-    if (!report) {
-      return res.status(404).json({ success: false, message: 'Report not found' });
-    }
-
-    const status = req.body.status;
-    const adminNotes = req.body.adminNotes ? req.body.adminNotes.trim() : null;
-    await dbRun(
-      `UPDATE issue_reports
-       SET status = $1,
-           admin_notes = $2,
-           validated_at = CASE
-             WHEN $1 IN ('validated','rejected','resolved') THEN NOW()
-             ELSE validated_at
-           END,
-           updated_at = NOW()
-       WHERE issue_id = $3`,
-      [status, adminNotes, report.issue_id]
-    );
-
-    if (
-      status === 'validated' &&
-      report.report_type === 'blacklist_passenger' &&
-      report.reporter_role === 'driver' &&
-      ['passenger', 'commuter'].includes(report.subject_role) &&
-      report.reporter_id &&
-      report.subject_id
-    ) {
-      await dbRun(
-        `INSERT INTO passenger_blacklist
-          (passenger_id, driver_id, issue_id, reason, is_active)
-         VALUES ($1,$2,$3,$4,true)
-         ON CONFLICT DO NOTHING`,
-        [
-          report.subject_id,
-          report.reporter_id,
-          report.issue_id,
-          report.details || report.title,
-        ]
-      ).catch(() => {});
-    }
-
-    const updated = await dbGet(
-      `SELECT * FROM issue_reports WHERE issue_id = $1`,
-      [report.issue_id]
-    );
+    const updated = await reviewIssueReport(req.params.issueId, {
+      status: req.body.status,
+      adminNotes: req.body.adminNotes?.trim(),
+      penaltySeverity: req.body.penaltySeverity,
+    });
 
     return res.json({
       success: true,
-      message: 'Report status updated.',
+      message: updated.status === 'validated' && updated.restriction_until
+        ? `Report validated. ${updated.penalty_minutes < 1440 ? 'Passenger booking cooldown' : 'Driver ride suspension'}: ${updated.penalty_minutes < 1440 ? `${updated.penalty_minutes} minutes` : `${updated.penalty_minutes / 1440} day(s)`}.`
+        : 'Report status updated.',
       report: updated,
     });
   } catch (error) {
     console.error('[Admin] Report status error:', error.message);
-    return res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(error.statusCode || 500).json({ success: false,
+      message: error.statusCode ? error.message : 'Server error' });
   }
 });
 

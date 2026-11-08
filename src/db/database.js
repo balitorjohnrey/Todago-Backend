@@ -769,6 +769,39 @@ async function initializeDatabase() {
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_static_pending_once
       ON wallet_transactions(user_id) WHERE static_qr_id IS NOT NULL AND status = 'pending'`);
 
+    // Merchant-wide static QR receipts are matched by a signed payment reference,
+    // never by a shared QR ID or the amount alone.
+    await client.query(`ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS merchant_qr BOOLEAN NOT NULL DEFAULT false`);
+    await client.query(`ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+    await client.query(`CREATE TABLE IF NOT EXISTS wallet_reset_runs (
+      reset_id TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      summary JSONB NOT NULL,
+      ledger_before JSONB NOT NULL
+    )`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_merchant_pending_once
+      ON wallet_transactions(user_id) WHERE merchant_qr = true AND status = 'pending'`);
+    await client.query(`CREATE TABLE IF NOT EXISTS merchant_qr_top_up_requests (
+      transaction_id TEXT PRIMARY KEY REFERENCES wallet_transactions(transaction_id),
+      reference TEXT,
+      claim_attempts INTEGER NOT NULL DEFAULT 0 CHECK (claim_attempts BETWEEN 0 AND 8),
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_merchant_qr_request_reference
+      ON merchant_qr_top_up_requests(reference) WHERE reference IS NOT NULL`);
+    await client.query(`CREATE TABLE IF NOT EXISTS merchant_qr_payments (
+      payment_id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL UNIQUE,
+      qr_id TEXT NOT NULL,
+      reference TEXT,
+      amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+      paid_at TIMESTAMPTZ,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      claimed_transaction_id TEXT UNIQUE REFERENCES wallet_transactions(transaction_id)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_merchant_qr_payment_reference
+      ON merchant_qr_payments(reference) WHERE reference IS NOT NULL`);
+
     // Manual driver e-wallet payouts. Pending/processing requests reserve funds.
     await client.query(`CREATE TABLE IF NOT EXISTS driver_earnings (
       trip_id TEXT PRIMARY KEY REFERENCES trips(trip_id),
@@ -1067,6 +1100,11 @@ async function initializeDatabase() {
       `CREATE INDEX IF NOT EXISTS idx_trips_commuter ON trips(commuter_id)`
     );
 
+    if (process.env.WALLET_RESET_REQUEST_ID?.trim()) {
+      const { runWalletReset } = require('../services/walletReset');
+      const summary = await runWalletReset(pool, process.env.WALLET_RESET_REQUEST_ID.trim());
+      console.log('[Wallet] Reset result:', JSON.stringify(summary));
+    }
     console.log('[DB] All tables initialized successfully ✅');
   } catch (err) {
     console.error('[DB] Initialization error:', err.message);

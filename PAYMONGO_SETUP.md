@@ -1,5 +1,12 @@
 # TodaGo wallet checkout
 
+The new Flutter **Top-Up** flow supports the existing merchant QR with signed
+live notifications and a passenger receipt reference, without PayMongo API calls.
+See [`INSTORE_QR_SETUP.md`](INSTORE_QR_SETUP.md) for activation requirements,
+the custom amount field, and the authorized wallet reset. Real top-ups stay
+disabled until the merchant QR ID and dedicated live signing secret are verified.
+The provider-API and per-passenger QR implementations below remain separate.
+
 ## Reusable QR per passenger
 
 Set `PAYMONGO_WALLET_QR_MODE=passenger_static` to enable reusable passenger QR

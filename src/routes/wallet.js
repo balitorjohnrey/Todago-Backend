@@ -80,7 +80,8 @@ function serializeLedgerTransaction(row) {
     occurred_at: row.occurred_at,
     trip_id: row.trip_id,
     checkout_url: row.checkout_url,
-    native_checkout: Boolean(row.payment_intent_id || row.static_qr_id),
+    native_checkout: Boolean(row.payment_intent_id || row.static_qr_id || row.merchant_qr),
+    merchant_checkout: row.merchant_qr === true,
   };
 }
 
@@ -116,6 +117,7 @@ async function loadWalletPayload(userId) {
        FROM wallet_transactions
        WHERE user_id = $1
          AND type = 'reward'
+         AND archived_at IS NULL
          AND direction = 'credit'
          AND status = 'completed'`,
       [userId]
@@ -133,10 +135,12 @@ async function loadWalletPayload(userId) {
          checkout_url,
          payment_intent_id,
          static_qr_id,
+         merchant_qr,
          trip_id,
          COALESCE(completed_at, created_at) AS occurred_at
        FROM wallet_transactions
        WHERE user_id = $1
+         AND archived_at IS NULL
        ORDER BY COALESCE(completed_at, created_at) DESC
        LIMIT 50`,
       [userId]
@@ -178,6 +182,8 @@ async function loadWalletPayload(userId) {
        FROM trips tr
        LEFT JOIN drivers d ON d.driver_id = tr.driver_id
        WHERE tr.commuter_id = $1
+         AND COALESCE(tr.end_timestamp, tr.paymongo_paid_at, tr.request_timestamp)
+           >= COALESCE((SELECT MAX(created_at) FROM wallet_reset_runs), '-infinity'::timestamptz)
          AND (
            tr.payment_status = 'paid'
            OR tr.status = 'completed'

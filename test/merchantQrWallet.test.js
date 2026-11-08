@@ -321,3 +321,27 @@ test('the mounted webhook verifies the signature before recording a payment; pas
   assert.equal((await request('POST', '/webhook', { data: paid({ amount: 9999 }) }, signature)).status, 401);
   assert.equal(state.wallets[0].status, 'pending');
 });
+
+test('merchant mode blocks legacy top-up creation before any provider request or ledger write', async t => {
+  const previous = process.env.PAYMONGO_WALLET_QR_MODE;
+  process.env.PAYMONGO_WALLET_QR_MODE = 'merchant_webhook';
+  t.after(() => { if (previous === undefined) delete process.env.PAYMONGO_WALLET_QR_MODE;
+    else process.env.PAYMONGO_WALLET_QR_MODE = previous; });
+  const forbidden = () => { throw new Error('Legacy provider calls and ledger writes must be blocked.'); };
+  const router = loadWith('src/routes/wallet.js', {
+    './auth': { requireAuth: (_req, _res, next) => next() },
+    '../db/database': { dbGet: forbidden, dbRun: forbidden, dbAll: forbidden },
+    '../services/paymongo': { getAvailablePaymentMethods: forbidden },
+    '../services/walletLedger': {}, '../services/walletPayments': {},
+    '../services/walletIntentPayments': {}, '../services/walletStaticQr': { staticQrEnabled: forbidden },
+  });
+  for (const routePath of ['/payment-methods', '/top-up']) {
+    let status = 200, response;
+    const res = { status(value) { status = value; return res; }, json(value) { response = value; return res; } };
+    const handler = router.stack.find(layer => layer.route?.path === routePath).route.stack.at(-1).handle;
+    await handler({ userId: 'alice', userRole: 'passenger', body: { provider: 'qrph', amount: 20 } }, res);
+    assert.equal(status, 409);
+    assert.equal(response.success, false);
+    assert.match(response.message, /Update TodaGo/);
+  }
+});

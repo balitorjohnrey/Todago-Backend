@@ -257,6 +257,10 @@ router.get('/', requireAuth, async (req, res) => {
 
 router.get('/payment-methods', requireAuth, async (req, res) => {
   if (!requirePassenger(req, res)) return;
+  if (process.env.PAYMONGO_WALLET_QR_MODE === 'merchant_webhook') {
+    return res.status(409).json({ success: false,
+      message: 'Update TodaGo to use the current QR Ph top-up flow.' });
+  }
   try {
     if (staticQrEnabled()) {
       requireStaticQrConfiguration();
@@ -407,6 +411,13 @@ router.post('/top-up', requireAuth, [
   const amount = toAmount(req.body.amount);
   if (provider !== 'qrph' || amountInCentavos(req.body.amount, MIN_TOP_UP) === null) {
     return res.status(422).json({ success: false, message: 'Choose QR Ph and a top-up of at least PHP 20.' });
+  }
+
+  // The merchant webhook flow must not share a ledger with new test-provider
+  // checkouts created by an older client or a direct API request.
+  if (process.env.PAYMONGO_WALLET_QR_MODE === 'merchant_webhook') {
+    return res.status(409).json({ success: false,
+      message: 'Update TodaGo to use the current QR Ph top-up flow.' });
   }
 
   try {

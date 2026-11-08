@@ -31,7 +31,9 @@ reset alone does not enable real-money top-ups.
 4. Set `PAYMONGO_INSTORE_QR_ID` to the verified event QR ID and
    `PAYMONGO_WALLET_QR_MODE=merchant_webhook` on that same service.
    The existing API key and old checkout webhook settings are independent and
-   need not be removed to use this new flow.
+   need not be removed to use this new flow. While `merchant_webhook` mode is
+   selected, the legacy payment-method and top-up-creation endpoints are blocked
+   so an older client cannot create test-provider wallet credits.
 5. Deploy the tested backend and install Flutter version code **3**. Before
    accepting passenger top-ups, complete a controlled payment yourself and verify
    that the bank receipt's reference equals the event's `external_reference_number`,

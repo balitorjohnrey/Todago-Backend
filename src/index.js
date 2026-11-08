@@ -85,6 +85,8 @@ app.use((err, req, res, next) => {
 async function start() {
   try {
     await initializeDatabase();
+    console.log('[Wallet] In-store QR configuration ready:',
+      require('./services/merchantQrWallet').configuration().ready);
     app.listen(PORT, () => {
       console.log(`[App] Server running on port ${PORT}`);
     });

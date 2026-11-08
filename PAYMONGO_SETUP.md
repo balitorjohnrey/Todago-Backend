@@ -1,5 +1,59 @@
 # TodaGo wallet checkout
 
+## Reusable QR per passenger
+
+Set `PAYMONGO_WALLET_QR_MODE=passenger_static` to enable reusable passenger QR
+top-ups. Deploy the backend first, then rebuild/install Flutter. Startup adds
+`passenger_wallet_qr_codes` and the optional static QR/payment ID ledger columns
+and unique indexes. Without this variable, existing dynamic QR checkout remains
+the default.
+
+This mode requires the merchant's **live** `PAYMONGO_SECRET_KEY` and the matching
+live endpoint's `PAYMONGO_WEBHOOK_SECRET` on Railway. Keep both server-side.
+The live key must be permitted to call `POST /v1/qrph/generate`. Test keys cannot
+display a payable static QR in this implementation.
+
+Use the existing enabled webhook at
+`https://todago-backend-production.up.railway.app/api/trips/paymongo/webhook`
+with **`payment.paid`** selected. Both the trips and wallet webhook endpoints
+support passenger QR payments and verify the signature before settlement.
+`link.payment.paid` is not used by this flow.
+
+On first top-up the server generates one merchant QR for the authenticated
+passenger and permanently stores its provider ID and original image. Repeated
+top-ups reuse that QR. Simultaneous requests for one passenger share one pending
+top-up. The shared TodaGo standee (`qr_be9cd139efbb7b6632b31e6f`) is deliberately
+not assigned to every passenger.
+
+The passenger selects an amount in TodaGo, then enters it in GCash/Maya/their
+bank after scanning. The signed payment's `source.provider.code_id` selects the
+stored passenger; the confirmed PHP amount selects the actual wallet credit.
+Thus paying PHP 50 after selecting PHP 100 credits PHP 50. Any positive confirmed
+amount up to PHP 50,000 can be received on a saved QR, including a repeat payment
+made without starting another top-up in TodaGo. The displayed presets remain
+PHP 20, 50, 100, 200, 500 and 1,000.
+
+Payment ID uniqueness and a locked passenger row prevent duplicate credits.
+Unknown/shared QR codes, test-mode payments, invalid amounts, non-PHP payments,
+disputed payments and payments already refunded are not credited. No payer-entered
+user ID, matching amount/time, screenshot or “I paid” button selects a wallet.
+
+Polling also reconciles recent provider payment records for the passenger's own
+assigned QR. A shared 20-second snapshot scans up to 1,000 recent merchant
+payments; webhooks are the primary path and must be monitored for delivery errors.
+Older missed events outside that window require provider webhook redelivery.
+
+Before a public release, validate with two demo passengers on the deployed backend:
+their generated QR IDs must differ; a small payment to each must arrive with the
+same assigned `source.provider.code_id`; each balance/history must update only for
+its owner. Redelivering the same event must leave the balance unchanged. Actual
+live creation, scanning and payment delivery require this account-level check;
+automated tests use provider fixtures and never charge a wallet.
+
+Provider references: [static QR API](https://docs.paymongo.com/reference/create-a-static-qr-ph-code),
+[QR payment webhook](https://docs.paymongo.com/docs/developer-tools-webhooks-events),
+[in-store QR](https://docs.paymongo.com/docs/payment-acceptance-in-store-qr-ph).
+
 ## Deploy
 
 Deploy this backend revision to the **Todago-Backend** Railway service and rebuild/install the Flutter app. A backend deployment by itself does not update an already installed app. Database initialization adds an optional payment intent ID and a unique index. Existing Hosted Checkout top-ups continue to work.

@@ -121,6 +121,25 @@ async function retrievePaymentIntent(id) {
   return (await paymongoRequest(`/v1/payment_intents/${encodeURIComponent(id)}`)).data;
 }
 
+async function createPassengerStaticQr({ userId }) {
+  if (!isLiveMode()) {
+    const error = new Error('Passenger QR top-ups require a live PayMongo secret key.');
+    error.statusCode = 503;
+    throw error;
+  }
+  return (await paymongoRequest('/v1/qrph/generate', {
+    method: 'POST',
+    idempotencyKey: `todago-passenger-qr-${userId}`,
+    body: { data: { attributes: {
+      kind: 'instore', notes: `TodaGo passenger wallet ${userId}`,
+    } } },
+  })).data;
+}
+
+async function listPayments({ after } = {}) {
+  return paymongoRequest(`/v1/payments?limit=100${after ? `&after=${encodeURIComponent(after)}` : ''}`);
+}
+
 function getPaidPayment(session) {
   const attrs = session?.attributes || {};
   const payments = [...(attrs.payments || []), ...(attrs.payment_intent?.attributes?.payments || [])];
@@ -292,4 +311,6 @@ module.exports = {
   createWalletPaymentIntent,
   attachWalletPaymentMethod,
   retrievePaymentIntent,
+  createPassengerStaticQr,
+  listPayments,
 };

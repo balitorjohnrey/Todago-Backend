@@ -90,6 +90,7 @@ test('native wallet payments', async (t) => {
     let attachFails = false;
     let passengerEmail = 'passenger@example.com';
     const router = loadWith('src/routes/wallet.js', {
+      '../services/walletStaticQr': { staticQrEnabled: () => false },
       './auth': { requireAuth: (_req, _res, next) => next() },
       '../db/database': {
         dbGet: async (sql) => {

@@ -158,6 +158,7 @@ function fixture(initialBalance = 100) {
     state.trips.set(id, row); return { ...row };
   }
   const router = loadWith('src/routes/trips.js', {
+    '../services/walletStaticQr': {},
     '../db/database': database, '../utils/adminReports': {}, '../services/paymongo': {},
     '../services/reportPenalties': loadWith('src/services/reportPenalties.js', { '../db/database': database }),
     '../services/walletLedger': ledger, '../services/walletPayments': {},

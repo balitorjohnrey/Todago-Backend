@@ -85,6 +85,7 @@ async function fixture(t) {
   const penalties = loadWith('src/services/reportPenalties.js', { '../db/database': database });
   const reports = loadWith('src/utils/adminReports.js', { '../db/database': database });
   const stubs = { '../db/database': database, '../services/reportPenalties': penalties,
+    '../services/walletStaticQr': {},
     '../utils/adminReports': reports, '../utils/routeAnalytics': {}, '../utils/peakHourAnalytics': {},
     '../services/driverWallet': {}, '../services/paymongo': {}, '../services/walletLedger': {},
     '../services/walletPayments': {}, '../services/walletIntentPayments': {},

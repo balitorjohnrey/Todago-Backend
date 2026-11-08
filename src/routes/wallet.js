@@ -17,6 +17,9 @@ const {
 } = require('../services/walletLedger');
 const { settleWalletCheckout, reconcileWalletTopUp, reconcileRecentTopUps } = require('../services/walletPayments');
 const { walletIntentPresentation, handleWalletPaymentEvent } = require('../services/walletIntentPayments');
+const { staticQrEnabled, requireStaticQrConfiguration, createStaticQrTopUp,
+  staticQrPresentation, getAssignedStaticQr, settleStaticQrPayment,
+  reconcileStaticQrPayments } = require('../services/walletStaticQr');
 
 const router = express.Router();
 const { MIN_TOP_UP, MAX_AMOUNT, amountInCentavos } = require('../services/paymentLimits');
@@ -77,7 +80,7 @@ function serializeLedgerTransaction(row) {
     occurred_at: row.occurred_at,
     trip_id: row.trip_id,
     checkout_url: row.checkout_url,
-    native_checkout: Boolean(row.payment_intent_id),
+    native_checkout: Boolean(row.payment_intent_id || row.static_qr_id),
   };
 }
 
@@ -129,6 +132,7 @@ async function loadWalletPayload(userId) {
          description,
          checkout_url,
          payment_intent_id,
+         static_qr_id,
          trip_id,
          COALESCE(completed_at, created_at) AS occurred_at
        FROM wallet_transactions
@@ -234,6 +238,9 @@ router.get('/', requireAuth, async (req, res) => {
     reconcileRecentTopUps(req.userId).catch((error) => {
       console.error('[Wallet] Background payment verification:', error.message);
     });
+    reconcileStaticQrPayments(req.userId).catch((error) => {
+      console.error('[Wallet] Passenger QR verification:', error.message);
+    });
     const payload = await loadWalletPayload(req.userId);
     return res.json({ success: true, wallet: payload });
   } catch (error) {
@@ -245,6 +252,11 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/payment-methods', requireAuth, async (req, res) => {
   if (!requirePassenger(req, res)) return;
   try {
+    if (staticQrEnabled()) {
+      requireStaticQrConfiguration();
+      return res.json({ success: true, methods: [{ id: 'qrph', type: 'qrph', label: 'QR Ph' }],
+        minimumTopUp: MIN_TOP_UP, testMode: false, qrMode: 'passenger_static' });
+    }
     const methods = (await getAvailablePaymentMethods()).filter(method => method.id === 'qrph');
     return res.json({ success: true, methods, minimumTopUp: MIN_TOP_UP, testMode: !isLiveMode(),
       message: methods.length ? null : 'No payment methods are available yet. Please try again later.' });
@@ -262,10 +274,21 @@ router.get('/top-ups/:transactionId', requireAuth, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(422).json({ success: false, message: 'Invalid top-up' });
   try {
-    const transaction = await dbGet(`SELECT transaction_id, checkout_session_id, payment_intent_id, provider, status
+    const transaction = await dbGet(`SELECT transaction_id, checkout_session_id, payment_intent_id,
+      static_qr_id, amount, provider, status
       FROM wallet_transactions WHERE transaction_id = $1 AND user_id = $2 AND type = 'topup'`,
     [req.params.transactionId, req.userId]);
     if (!transaction) return res.status(404).json({ success: false, message: 'Top-up not found' });
+    if (transaction.static_qr_id) {
+      requireStaticQrConfiguration();
+      await reconcileStaticQrPayments(req.userId);
+      const updated = await dbGet(`SELECT status, amount FROM wallet_transactions WHERE transaction_id = $1`,
+        [transaction.transaction_id]);
+      const assignment = await getAssignedStaticQr(req.userId, transaction.static_qr_id);
+      if (!assignment) throw new Error('Passenger QR assignment is unavailable.');
+      return res.json({ success: true, status: updated.status, testMode: false,
+        payment: staticQrPresentation(assignment, updated.amount), wallet: await loadWalletPayload(req.userId) });
+    }
     const intent = await reconcileWalletTopUp(transaction);
     const updated = await dbGet(`SELECT status FROM wallet_transactions WHERE transaction_id = $1`,
       [transaction.transaction_id]);
@@ -381,6 +404,10 @@ router.post('/top-up', requireAuth, [
   }
 
   try {
+    if (staticQrEnabled()) {
+      const checkout = await createStaticQrTopUp(req.userId, amount);
+      return res.status(201).json({ success: true, ...checkout, wallet: await loadWalletPayload(req.userId) });
+    }
     const methods = await getAvailablePaymentMethods();
     const selectedMethod = methods.find((method) => method.id === provider);
     if (!selectedMethod) {
@@ -544,7 +571,9 @@ router.post('/paymongo/webhook', async (req, res) => {
       ? root?.attributes?.type
       : (root?.type || root?.attributes?.type);
     if (['payment.paid', 'payment.failed'].includes(eventType)) {
-      const handled = await handleWalletPaymentEvent(root?.data || root?.attributes?.data, livemode);
+      const payment = root?.data || root?.attributes?.data;
+      const handled = eventType === 'payment.paid' && await settleStaticQrPayment(payment, livemode)
+        || await handleWalletPaymentEvent(payment, livemode);
       return res.status(200).json({ success: true, ignored: !handled });
     }
     if (eventType !== 'checkout_session.payment.paid') {

@@ -168,6 +168,7 @@ test('simulated payment balances cannot request a real cash-out', async () => {
 test('QR Ph is the only top-up method and the endpoint rejects less than PHP 20 before creating payments', async () => {
   let writes = 0;
   const router = loadWith('src/routes/wallet.js', {
+    '../services/walletStaticQr': { staticQrEnabled: () => false },
     './auth': { requireAuth: (_req,_res,next) => next() },
     '../db/database': { dbRun: async () => writes++ },
     '../services/paymongo': { getAvailablePaymentMethods: async () => [{ id:'gcash' },{ id:'maya' },{ id:'qrph' }], isLiveMode:()=>true },

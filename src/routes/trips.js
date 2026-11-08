@@ -18,6 +18,7 @@ const {
 } = require('../services/walletLedger');
 const { settleWalletCheckout } = require('../services/walletPayments');
 const { handleWalletPaymentEvent } = require('../services/walletIntentPayments');
+const { settleStaticQrPayment } = require('../services/walletStaticQr');
 const { completePaidTrip } = require('../services/tripPayments');
 
 const router = express.Router();
@@ -230,7 +231,9 @@ router.post('/paymongo/webhook', async (req, res) => {
       ? root?.attributes?.type
       : (root?.type || root?.attributes?.type);
     if (['payment.paid', 'payment.failed'].includes(eventType)) {
-      const handled = await handleWalletPaymentEvent(root?.data || root?.attributes?.data, livemode);
+      const payment = root?.data || root?.attributes?.data;
+      const handled = eventType === 'payment.paid' && await settleStaticQrPayment(payment, livemode)
+        || await handleWalletPaymentEvent(payment, livemode);
       return res.status(200).json({ success: true, ignored: !handled });
     }
     if (eventType !== 'checkout_session.payment.paid') {

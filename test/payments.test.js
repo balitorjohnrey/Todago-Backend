@@ -164,6 +164,7 @@ test('PayMongo checkout and wallet safety', async (t) => {
   await t.test('top-up status is scoped to its authenticated passenger', async () => {
     let boundUser;
     const router = loadWith('src/routes/wallet.js', {
+      '../services/walletStaticQr': { staticQrEnabled: () => false },
       './auth': { requireAuth: (_req, _res, next) => next() },
       '../db/database': { dbGet: async (_sql, params) => { boundUser = params[1]; return null; } },
       '../services/paymongo': paymongo,

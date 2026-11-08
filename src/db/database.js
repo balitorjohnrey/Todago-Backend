@@ -752,6 +752,23 @@ async function initializeDatabase() {
        WHERE trip_id IS NOT NULL AND type = 'trip' AND status <> 'failed'`
     );
 
+    // A QR belongs permanently to one passenger. Never reuse the merchant-wide
+    // standee for this mapping or reassign a passenger's QR to another wallet.
+    await client.query(`CREATE TABLE IF NOT EXISTS passenger_wallet_qr_codes (
+      user_id TEXT PRIMARY KEY REFERENCES users(id),
+      qr_code_id TEXT NOT NULL UNIQUE,
+      qr_image TEXT NOT NULL,
+      livemode BOOLEAN NOT NULL CHECK (livemode = true),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await client.query(`ALTER TABLE wallet_transactions
+      ADD COLUMN IF NOT EXISTS static_qr_id TEXT REFERENCES passenger_wallet_qr_codes(qr_code_id)`);
+    await client.query(`ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS provider_payment_id TEXT`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_provider_payment_once
+      ON wallet_transactions(provider_payment_id) WHERE provider_payment_id IS NOT NULL`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_static_pending_once
+      ON wallet_transactions(user_id) WHERE static_qr_id IS NOT NULL AND status = 'pending'`);
+
     // Manual driver e-wallet payouts. Pending/processing requests reserve funds.
     await client.query(`CREATE TABLE IF NOT EXISTS driver_earnings (
       trip_id TEXT PRIMARY KEY REFERENCES trips(trip_id),

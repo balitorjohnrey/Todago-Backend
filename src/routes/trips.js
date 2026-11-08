@@ -750,7 +750,7 @@ router.post('/:tripId/payment/checkout', requireAuth, [
   }
   try {
     const trip = await dbGet(
-      `SELECT tr.*, u.full_name AS commuter_name, u.phone AS commuter_phone,
+      `SELECT tr.*, u.full_name AS commuter_name, u.phone AS commuter_phone, u.email AS commuter_email,
               d.driver_name
        FROM trips tr
        LEFT JOIN users u ON u.id = tr.commuter_id
@@ -817,6 +817,7 @@ router.post('/:tripId/payment/checkout', requireAuth, [
       amount: trip.fare,
       paymentMethod,
       passengerName: trip.commuter_name,
+      passengerEmail: trip.commuter_email,
       passengerPhone: trip.commuter_phone,
       description: `TodaGo ride to ${trip.destination || 'destination'}`,
     });

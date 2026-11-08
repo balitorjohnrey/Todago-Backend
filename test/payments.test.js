@@ -77,11 +77,13 @@ test('PayMongo checkout and wallet safety', async (t) => {
         { data: { id: 'cs_new', attributes: { checkout_url: 'https://checkout.paymongo.com/new' } } } };
     };
     await paymongo.createCheckoutSession({ referenceId: 'topup-1', amount: 100,
-      paymentMethodTypes: ['gcash', 'qrph'], successUrl: 'https://example.com/success', cancelUrl: 'https://example.com/cancel' });
+      paymentMethodTypes: ['gcash', 'qrph'], passengerEmail: ' passenger@example.com ',
+      successUrl: 'https://example.com/success', cancelUrl: 'https://example.com/cancel' });
     const body = JSON.parse(requests[1].options.body).data.attributes;
     assert.deepEqual(body.payment_method_types, ['qrph']);
     assert.equal(body.line_items[0].amount, 10000);
     assert.equal(body.line_items[0].currency, 'PHP');
+    assert.equal(body.billing.email, 'passenger@example.com');
     const before = requests.length;
     await assert.rejects(paymongo.createCheckoutSession({ referenceId: 'topup-2', amount: 100, paymentMethod: 'gcash' }), /not available/);
     assert.equal(requests.length, before, 'an unavailable method must never create a checkout');

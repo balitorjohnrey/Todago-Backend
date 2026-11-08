@@ -389,13 +389,18 @@ router.post('/top-up', requireAuth, [
     }
 
     const user = await dbGet(
-      `SELECT full_name, phone
+      `SELECT full_name, phone, email
        FROM users
        WHERE id = $1 AND is_active = true`,
       [req.userId]
     );
     if (!user) {
       return res.status(404).json({ success: false, message: 'Passenger account not found' });
+    }
+    const passengerEmail = user.email?.trim();
+    if (!passengerEmail) {
+      return res.status(422).json({ success: false,
+        message: 'Add an email address to your TodaGo account before topping up.' });
     }
 
     const transactionId = uuidv4();
@@ -428,7 +433,8 @@ router.post('/top-up', requireAuth, [
           WHERE transaction_id = $2 AND status = 'pending'`, [intent.id, transactionId]);
         storedIntent = intent.id;
         const attached = await attachWalletPaymentMethod({ intentId: intent.id,
-          methodType: selectedMethod.type, name: user.full_name, phone: user.phone, transactionId });
+          methodType: selectedMethod.type, name: user.full_name, email: passengerEmail,
+          phone: user.phone, transactionId });
         if (attached.id !== storedIntent) throw new Error('Payment intent does not match');
         return res.status(201).json({ success: true, transactionId, testMode: !isLiveMode(),
           payment: walletIntentPresentation(attached, provider), wallet: await loadWalletPayload(req.userId) });
@@ -448,6 +454,7 @@ router.post('/top-up', requireAuth, [
         paymentMethod: provider,
         paymentMethodTypes: [selectedMethod.type],
         passengerName: user.full_name,
+        passengerEmail,
         passengerPhone: user.phone,
         lineItemName: 'TodaGo wallet top-up',
         description: `TodaGo wallet top-up via ${providerLabel(provider)}`,

@@ -54,11 +54,27 @@ test('native wallet payments', async (t) => {
       assert.equal(body.currency, 'PHP');
       assert.deepEqual(body.payment_method_allowed, [methodType]);
       assert.equal(body.metadata.wallet_transaction_id, 'topup-1');
-      await paymongo.attachWalletPaymentMethod({ intentId: 'pi_example', methodType, transactionId: 'topup-1' });
+      await paymongo.attachWalletPaymentMethod({ intentId: 'pi_example', methodType,
+        name: 'Test Passenger', email: ' passenger@example.com ', phone: '09170000000',
+        transactionId: 'topup-1' });
       assert.equal(requests.at(-2).body.type, methodType);
+      assert.deepEqual(requests.at(-2).body.billing, {
+        name: 'Test Passenger', email: 'passenger@example.com', phone: '09170000000',
+      });
       assert.equal(requests.at(-1).body.payment_method, 'pm_test');
       assert.match(requests.at(-1).body.return_url, /\/api\/wallet\/paymongo\/return\?transactionId=topup-1/);
     }
+  });
+
+  await t.test('missing billing email is rejected before contacting PayMongo', async () => {
+    let calls = 0;
+    global.fetch = async () => { calls++; throw new Error('Unexpected provider request'); };
+    for (const email of [undefined, null, '', '   ']) {
+      await assert.rejects(paymongo.attachWalletPaymentMethod({ intentId: 'pi_example',
+        methodType: 'qrph', email, transactionId: 'topup-1' }),
+      error => error.statusCode === 422 && /email/i.test(error.message));
+    }
+    assert.equal(calls, 0);
   });
 
   await t.test('an inactive GCash capability cannot be bypassed by the app', async () => {
@@ -72,10 +88,14 @@ test('native wallet payments', async (t) => {
   await t.test('native checkout persists its intent before authorization; older apps keep Hosted Checkout', async () => {
     const calls = [];
     let attachFails = false;
+    let passengerEmail = 'passenger@example.com';
     const router = loadWith('src/routes/wallet.js', {
       './auth': { requireAuth: (_req, _res, next) => next() },
       '../db/database': {
-        dbGet: async () => ({ full_name: 'Test Passenger', phone: '09170000000' }),
+        dbGet: async (sql) => {
+          if (sql.includes('FROM users')) assert.match(sql, /\bemail\b/);
+          return { full_name: 'Test Passenger', email: passengerEmail, phone: '09170000000' };
+        },
         dbAll: async () => [],
         dbRun: async (sql) => { calls.push(sql.includes('SET payment_intent_id') ? 'persist' : sql.includes("status = 'failed'") ? 'fail' : 'write'); },
       },
@@ -86,15 +106,26 @@ test('native wallet payments', async (t) => {
         getAvailablePaymentMethods: async () => [{ id: 'qrph', type: 'qrph', label: 'QR Ph' }],
         isLiveMode: () => false,
         createWalletPaymentIntent: async () => { calls.push('intent'); return intent(); },
-        attachWalletPaymentMethod: async () => { calls.push('attach'); if (attachFails) throw new Error('Provider timeout'); return intent(); },
-        createCheckoutSession: async () => { calls.push('hosted'); return { id: 'cs_example', attributes: { checkout_url: 'https://checkout.paymongo.com/cs_example' } }; },
+        attachWalletPaymentMethod: async (args) => {
+          calls.push('attach');
+          assert.equal(args.email, 'passenger@example.com');
+          if (attachFails) throw new Error('Provider timeout');
+          return intent();
+        },
+        createCheckoutSession: async (args) => {
+          calls.push('hosted');
+          assert.equal(args.passengerEmail, 'passenger@example.com');
+          return { id: 'cs_example', attributes: { checkout_url: 'https://checkout.paymongo.com/cs_example' } };
+        },
       },
     });
     const route = router.stack.find((layer) => layer.route?.path === '/top-up').route.stack.at(-1).handle;
     let response;
     let status;
     const res = { status: code => { status = code; return res; }, json: data => { response = data; return res; } };
-    const req = { userId: 'passenger-1', userRole: 'passenger', body: { provider: 'qrph', amount: 100, checkoutExperience: 'native' } };
+    const req = { userId: 'passenger-1', userRole: 'passenger', body: {
+      provider: 'qrph', amount: 100, checkoutExperience: 'native', email: 'untrusted@example.com',
+    } };
     await route(req, res);
     assert.equal(status, 201);
     assert.equal(response.payment.kind, 'qr');
@@ -112,6 +143,14 @@ test('native wallet payments', async (t) => {
     assert.equal(status, 500);
     assert.equal(calls.includes('persist'), true);
     assert.equal(calls.includes('fail'), false, 'an uncertain provider outcome must remain recoverable');
+    passengerEmail = '   ';
+    for (const checkoutExperience of ['native', 'hosted']) {
+      calls.length = 0;
+      await route({ ...req, body: { ...req.body, checkoutExperience } }, res);
+      assert.equal(status, 422);
+      assert.match(response.message, /email/i);
+      assert.deepEqual(calls, [], 'missing email must not create a pending row or a payment');
+    }
   });
 
   const transaction = { transaction_id: 'topup-1', payment_intent_id: 'pi_example', status: 'pending' };

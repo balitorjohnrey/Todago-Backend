@@ -93,13 +93,19 @@ async function createWalletPaymentIntent({ transactionId, userId, amount, method
   })).data;
 }
 
-async function attachWalletPaymentMethod({ intentId, methodType, name, phone, transactionId }) {
+async function attachWalletPaymentMethod({ intentId, methodType, name, email, phone, transactionId }) {
   if (!/^pi_[a-zA-Z0-9_-]+$/.test(intentId || '')) throw new Error('Invalid payment intent');
   if (!['gcash', 'paymaya', 'qrph'].includes(methodType)) throw new Error('Unsupported wallet payment');
+  const billingEmail = typeof email === 'string' ? email.trim() : '';
+  if (!billingEmail) {
+    const error = new Error('Add an email address to your TodaGo account before topping up.');
+    error.statusCode = 422;
+    throw error;
+  }
   const method = (await paymongoRequest('/v1/payment_methods', {
     method: 'POST', idempotencyKey: `todago-method-${transactionId}`,
     body: { data: { attributes: { type: methodType,
-      billing: { name: name || 'TodaGo Passenger', ...(phone ? { phone } : {}) },
+      billing: { name: name || 'TodaGo Passenger', email: billingEmail, ...(phone ? { phone } : {}) },
     } } },
   })).data;
   return (await paymongoRequest(`/v1/payment_intents/${encodeURIComponent(intentId)}/attach`, {
@@ -160,6 +166,7 @@ async function createCheckoutSession({
   amount,
   paymentMethod,
   passengerName,
+  passengerEmail,
   passengerPhone,
   description,
   successUrl,
@@ -196,6 +203,7 @@ async function createCheckoutSession({
   const billing = {
     name: passengerName || 'TodaGo Passenger',
   };
+  if (typeof passengerEmail === 'string' && passengerEmail.trim()) billing.email = passengerEmail.trim();
   if (passengerPhone) billing.phone = passengerPhone;
 
   const body = {

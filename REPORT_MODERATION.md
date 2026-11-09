@@ -14,8 +14,30 @@ When validating a passenger/driver incident, the admin selects `penaltySeverity`
 
 Omitting severity defaults to standard for older clients. System and operator
 reports remain available for admin review without automatically imposing these
-passenger/driver penalties. A report targeting an account without its ID cannot
-receive a penalty; submit that incident from the trip screen to link the account.
+passenger/driver penalties. Passenger/driver incidents now require a trip: select
+one in the dashboard report sheet or use Report Passenger/Report Driver on the
+trip or completed-trip screen. The API verifies that the reporter owns the trip
+and derives the other participant's ID and name, ignoring client-supplied targets.
+General "Other" reports may still be submitted without a trip.
+
+Older dashboard reports with no trip or account ID cannot be linked reliably.
+The reporter must submit the incident again with the correct trip selected;
+do not infer a person from names or the reporter's latest trip.
+
+## Feedback after payment
+
+After payment collection completes the ride, both roles can submit a 1–5 star
+rating and report the other participant. Rating submission leaves Report
+Passenger/Report Driver available. Passengers can also use Bookings > Past;
+drivers can use Past Trips on their dashboard.
+
+`POST /api/trips/:tripId/rate` and `GET /api/trips/:tripId/rating` use the
+authenticated role to select the participant's own feedback. Passenger-to-driver
+ratings remain in `feedback` and update the driver's average. Driver-to-passenger
+ratings use the new `passenger_feedback` table and do not change driver averages.
+Only participants in a completed, paid trip may submit ratings, once per role
+per trip. Rating writes and driver averages commit together, with row locks
+preventing duplicate concurrent submissions.
 
 The timer starts when the admin validates the report. The report decision,
 severity, duration, and expiry are saved in one atomic update. Retrying or

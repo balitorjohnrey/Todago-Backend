@@ -877,6 +877,20 @@ async function initializeDatabase() {
       )
     `);
 
+    // Driver-to-passenger feedback is separate so it cannot affect a driver's
+    // public rating or the existing passenger-to-driver feedback queries.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS passenger_feedback (
+        feedback_id  TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        trip_id      TEXT NOT NULL UNIQUE REFERENCES trips(trip_id) ON DELETE CASCADE,
+        commuter_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        driver_id    TEXT NOT NULL REFERENCES drivers(driver_id) ON DELETE CASCADE,
+        rating_score INT NOT NULL CHECK (rating_score BETWEEN 1 AND 5),
+        comments     TEXT,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // ── PEAK HOUR LOGS ────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS peak_hour_logs (

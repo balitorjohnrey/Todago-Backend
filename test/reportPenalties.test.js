@@ -158,6 +158,46 @@ test('trip reports reach the admin queue pending, linked to the actual reported 
   }, 'different-driver')).code, 403);
 });
 
+test('dashboard account reports require a trip; completed-trip reports link the actual participants', async t => {
+  const f = await fixture(t);
+  f.state.trips.set('paid-trip', { commuter_id: 'passenger-1', driver_id: 'driver-1',
+    status: 'completed', payment_status: 'paid' });
+  for (const [role, reportType, subjectRole, subjectId] of [
+    ['driver', 'passenger_issue', 'passenger', 'passenger-1'],
+    ['driver', 'blacklist_passenger', 'passenger', 'passenger-1'],
+    ['passenger', 'driver_behavior', 'driver', 'driver-1'],
+  ]) {
+    const unlinked = await f.request('POST', '/reports', role, { reportType, title: 'Trip incident' });
+    assert.equal(unlinked.code, 422);
+    assert.match(unlinked.data.message, /Select the trip/);
+    const forged = await f.request('POST', '/reports', role, {
+      reportType: 'other', title: 'Trip incident', subjectRole, subjectId: 'unrelated-account',
+    });
+    assert.equal(forged.code, 422);
+    const linked = await f.request('POST', '/reports', role, {
+      reportType, title: 'Trip incident', tripId: 'paid-trip',
+      subjectRole: 'operator', subjectId: 'unrelated-account', subjectName: 'Wrong person',
+    });
+    assert.equal(linked.code, 201);
+    assert.equal(linked.data.report.subject_role, subjectRole);
+    assert.equal(linked.data.report.subject_id, subjectId);
+    assert.equal(linked.data.report.subject_name, role === 'driver' ? 'Passenger One' : 'Driver One');
+    assert.equal(linked.data.report.trip_id, 'paid-trip');
+    assert.equal(linked.data.report.status, 'pending');
+  }
+  const queue = await f.request('GET', '/admin/reports');
+  assert.equal(queue.data.total, 3);
+  assert.ok(queue.data.reports.every(report => report.subject_id && report.trip_id));
+
+  f.state.trips.set('unassigned-trip', { commuter_id: 'passenger-1', driver_id: null });
+  assert.equal((await f.request('POST', '/reports', 'passenger', {
+    reportType: 'driver_behavior', title: 'Missing driver', tripId: 'unassigned-trip',
+  })).code, 422);
+  assert.equal((await f.request('POST', '/reports', 'driver', {
+    reportType: 'other', title: 'General dashboard issue',
+  })).code, 201);
+});
+
 for (const [severity, minutes] of [['standard', 30], ['severe', 60]]) {
   test(`validated passenger report blocks instant and scheduled bookings for ${minutes} minutes`, async t => {
     const f = await fixture(t);

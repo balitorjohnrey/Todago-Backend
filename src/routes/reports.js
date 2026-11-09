@@ -70,6 +70,18 @@ router.post('/', requireAnyAuth, [
     let subjectRole = req.body.subjectRole || null;
     let subjectId = req.body.subjectId || null;
     let subjectName = req.body.subjectName || null;
+    const participantReporter = ['driver', 'passenger'].includes(req.actorRole);
+    const accountIncident = req.actorRole === 'driver'
+      ? ['passenger_issue', 'blacklist_passenger', 'fare_or_item_issue'].includes(req.body.reportType)
+      : req.actorRole === 'passenger' &&
+        ['wrong_driver_vehicle', 'driver_behavior', 'fare_or_baggage_fee'].includes(req.body.reportType);
+    const accountSubject = ['driver', 'passenger', 'commuter'].includes(subjectRole);
+    if (participantReporter && !req.body.tripId && (accountIncident || accountSubject || subjectId)) {
+      return res.status(422).json({
+        success: false,
+        message: 'Select the trip for this report so admin can identify the passenger or driver.',
+      });
+    }
     if (req.body.tripId) {
       const trip = await dbGet(
         'SELECT commuter_id, driver_id FROM trips WHERE trip_id = $1',
@@ -83,6 +95,9 @@ router.post('/', requireAnyAuth, [
         }
         subjectRole = isDriver ? 'passenger' : 'driver';
         subjectId = isDriver ? trip.commuter_id : trip.driver_id;
+        if (!subjectId) {
+          return res.status(422).json({ success: false, message: 'This trip has no linked passenger or driver to report.' });
+        }
         subjectName = await actorName(subjectRole, subjectId);
       }
     }

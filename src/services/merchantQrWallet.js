@@ -18,7 +18,7 @@ function normalizeReference(value) {
 function configuration() {
   const qrId = process.env.PAYMONGO_INSTORE_QR_ID?.trim();
   const secret = process.env.PAYMONGO_INSTORE_WEBHOOK_SECRET?.trim();
-  const enabled = process.env.PAYMONGO_WALLET_QR_MODE === 'merchant_webhook';
+  const enabled = ['merchant_webhook', 'passenger_pool'].includes(process.env.PAYMONGO_WALLET_QR_MODE);
   return { qrId, secret, ready: enabled && /^(?:qr|code)_[A-Za-z0-9_-]+$/.test(qrId || '') && Boolean(secret) };
 }
 

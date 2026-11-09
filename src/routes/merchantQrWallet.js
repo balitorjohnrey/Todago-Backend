@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { requireAuth } = require('./auth');
 const service = require('../services/merchantQrWallet');
+const qrPool = require('../services/passengerQrPool');
 
 const router = express.Router();
 const referenceLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 20,
@@ -26,11 +27,16 @@ function endpoint(action) {
 }
 
 router.get('/configuration', requireAuth, passenger, endpoint(async () => {
+  if (qrPool.enabled()) return { available: qrPool.ready(), qrMode: 'passenger_pool', testMode: false };
   const ready = service.configuration().ready;
   return { available: ready, minimumTopUp: 20, qrPageUrl: ready ? service.QR_PAGE_URL : null };
 }));
 
-router.post('/top-ups', requireAuth, passenger, endpoint(req => service.createTopUp(req.userId, req.body.amount)));
+router.get('/passenger-qr', requireAuth, passenger, endpoint(req => qrPool.getPassengerQr(req.userId)));
+router.post('/top-ups', requireAuth, passenger, endpoint(req => {
+  if (qrPool.enabled()) throw Object.assign(new Error('Update TodaGo to use your passenger QR.'), { statusCode: 409 });
+  return service.createTopUp(req.userId, req.body.amount);
+}));
 router.get('/top-ups/:transactionId', requireAuth, passenger,
   endpoint(req => service.readTopUp(req.userId, req.params.transactionId)));
 router.post('/top-ups/:transactionId/reference', requireAuth, passenger, referenceLimit,
@@ -41,7 +47,11 @@ router.post('/webhook', async (req, res) => {
     return res.status(401).json({ success: false, message: 'Invalid webhook signature' });
   }
   try {
-    const handled = await service.receivePaidEvent(req.body?.data);
+    const handled = qrPool.enabled()
+      ? await qrPool.receivePaidEvent(req.body?.data) ||
+        (service.configuration().ready && await service.receivePaidEvent(req.body?.data))
+      : await service.receivePaidEvent(req.body?.data);
+    if (handled) await qrPool.recoverApprovedPayment();
     return res.json({ success: true, ignored: !handled });
   } catch (error) {
     // Database/configuration failures remain retryable; never log receipt data.

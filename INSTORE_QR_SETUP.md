@@ -1,5 +1,9 @@
 # Existing in-store QR: real wallet top-ups without a live API key
 
+The current passenger QR pool supersedes the shared-QR reference flow below.
+See [PASSENGER_QR_POOL_SETUP.md](PASSENGER_QR_POOL_SETUP.md) for deployment,
+stock replenishment and webhook matching without receipt-reference entry.
+
 The new flow receives signed live `payment.paid` notifications. It does not
 generate a QR, retrieve payments or call the PayMongo API. The existing white
 QR page with a blue Done button remains at:

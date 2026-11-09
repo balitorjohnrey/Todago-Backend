@@ -159,6 +159,13 @@ router.post('/register', [
       }
     }
 
+    // A shortage of QRs must not prevent account registration. Existing accounts
+    // receive the same permanent assignment when they first open top-up.
+    try {
+      await require('../services/passengerQrPool').assign(userId);
+    } catch (qrError) {
+      console.error('[Wallet] Passenger QR assignment will retry on top-up:', qrError.message);
+    }
     const user  = await dbGet('SELECT * FROM users WHERE id = $1', [userId]);
     const token = generateToken(userId);
 

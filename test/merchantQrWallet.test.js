@@ -281,6 +281,7 @@ test('the mounted webhook verifies the signature before recording a payment; pas
   } });
   const router = loadWith('src/routes/merchantQrWallet.js', {
     '../services/merchantQrWallet': service,
+    '../services/passengerQrPool': { enabled: () => false, recoverApprovedPayment: async () => ({ status: 'not_requested' }) },
     './auth': { requireAuth(req, res, next) {
       if (!req.get('Authorization')) return res.status(401).json({ success: false });
       req.userId = 'alice'; req.userRole = req.get('Authorization') === 'Bearer driver' ? 'driver' : 'passenger'; next();
@@ -335,6 +336,8 @@ test('merchant mode blocks legacy top-up creation before any provider request or
     '../services/walletLedger': {}, '../services/walletPayments': {},
     '../services/walletIntentPayments': {}, '../services/walletStaticQr': { staticQrEnabled: forbidden },
   });
+  for (const mode of ['merchant_webhook', 'passenger_pool']) {
+  process.env.PAYMONGO_WALLET_QR_MODE = mode;
   for (const routePath of ['/payment-methods', '/top-up']) {
     let status = 200, response;
     const res = { status(value) { status = value; return res; }, json(value) { response = value; return res; } };
@@ -343,5 +346,6 @@ test('merchant mode blocks legacy top-up creation before any provider request or
     assert.equal(status, 409);
     assert.equal(response.success, false);
     assert.match(response.message, /Update TodaGo/);
+  }
   }
 });

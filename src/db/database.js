@@ -802,6 +802,8 @@ async function initializeDatabase() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_merchant_qr_payment_reference
       ON merchant_qr_payments(reference) WHERE reference IS NOT NULL`);
 
+    await require('../services/passengerQrPool').initialize(client);
+
     // Manual driver e-wallet payouts. Pending/processing requests reserve funds.
     await client.query(`CREATE TABLE IF NOT EXISTS driver_earnings (
       trip_id TEXT PRIMARY KEY REFERENCES trips(trip_id),

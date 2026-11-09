@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
-const { initializeDatabase } = require('./db/database');
+const { initializeDatabase, pool } = require('./db/database');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -85,6 +85,13 @@ app.use((err, req, res, next) => {
 async function start() {
   try {
     await initializeDatabase();
+    const qrPool = require('./services/passengerQrPool');
+    console.log('[Wallet] Passenger QR pool ready:', qrPool.ready());
+    const inventory = (await pool.query(`SELECT COUNT(*)::int AS total,
+      (COUNT(*) FILTER (WHERE assigned_user_id IS NULL AND enabled = true))::int AS available
+      FROM wallet_qr_pool`)).rows[0];
+    console.log('[Wallet] Passenger QR pool inventory:', JSON.stringify(inventory));
+    console.log('[Wallet] Shared QR recovery:', JSON.stringify(await qrPool.recoverApprovedPayment()));
     console.log('[Wallet] In-store QR configuration ready:',
       require('./services/merchantQrWallet').configuration().ready);
     app.listen(PORT, () => {

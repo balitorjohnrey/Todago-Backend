@@ -897,6 +897,18 @@ async function initializeDatabase() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_messages_inbox
       ON driver_messages(driver_id, (read_at IS NOT NULL), created_at DESC, message_id DESC)`);
 
+    await client.query(`CREATE TABLE IF NOT EXISTS trip_messages (
+      message_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      trip_id TEXT NOT NULL REFERENCES trips(trip_id) ON DELETE CASCADE,
+      sender_role TEXT NOT NULL CHECK (sender_role IN ('driver', 'passenger')),
+      request_id TEXT NOT NULL,
+      body TEXT NOT NULL CHECK (CHAR_LENGTH(BTRIM(body)) BETWEEN 1 AND 500),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      UNIQUE (trip_id, sender_role, request_id)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_trip_messages_history
+      ON trip_messages(trip_id, message_id DESC)`);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS performance_reports (
         report_id     TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,

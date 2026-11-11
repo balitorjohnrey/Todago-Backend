@@ -1,4 +1,4 @@
-const { getDriverPerformance } = require('../services/driverPerformance');
+const { getDriverPerformance, getDriverPerformanceProfile } = require('../services/driverPerformance');
 const { classifyServiceArea } = require('../utils/serviceAreas');
 
 function integer(value, fallback, max) {
@@ -14,6 +14,17 @@ function registerAdminMonitoring(router, requireAdminAuth, { dbAll, dbGet }) {
     } catch (error) {
       console.error('[Admin] Driver performance error:', error.message);
       return res.status(500).json({ success: false, message: 'Unable to load driver performance' });
+    }
+  });
+
+  router.get('/monitoring/drivers/:driverId', requireAdminAuth, async (req, res) => {
+    try {
+      const driver = await getDriverPerformanceProfile(dbGet, req.params.driverId);
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+      return res.json({ success: true, driver });
+    } catch (error) {
+      console.error('[Admin] Driver profile error:', error.message);
+      return res.status(500).json({ success: false, message: 'Unable to load driver profile' });
     }
   });
 

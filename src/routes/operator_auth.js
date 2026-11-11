@@ -14,7 +14,7 @@ const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
-const { getDriverPerformance } = require('../services/driverPerformance');
+const { getDriverPerformance, getDriverPerformanceProfile } = require('../services/driverPerformance');
 const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
 const {
   clampInt: clampPeakInt,
@@ -685,6 +685,19 @@ router.get('/analytics/drivers', requireOperatorAuth, async (req, res) => {
   } catch (error) {
     console.error('[Operator] Driver performance error:', error.message);
     return res.status(500).json({ success: false, message: 'Unable to load driver performance' });
+  }
+});
+
+router.get('/analytics/drivers/:driverId', requireOperatorAuth, async (req, res) => {
+  try {
+    const op = await dbGet('SELECT toda_id FROM operators WHERE operator_id = $1', [req.operatorId]);
+    if (!op?.toda_id) return res.status(404).json({ success: false, message: 'Operator association not found' });
+    const driver = await getDriverPerformanceProfile(dbGet, req.params.driverId, op.toda_id);
+    if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+    return res.json({ success: true, driver });
+  } catch (error) {
+    console.error('[Operator] Driver profile error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to load driver profile' });
   }
 });
 

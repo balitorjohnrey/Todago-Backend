@@ -22,6 +22,7 @@ const { settleWalletCheckout } = require('../services/walletPayments');
 const { handleWalletPaymentEvent } = require('../services/walletIntentPayments');
 const { settleStaticQrPayment } = require('../services/walletStaticQr');
 const { completePaidTrip } = require('../services/tripPayments');
+const { registerTripMessages } = require('./tripMessages');
 
 const router = express.Router();
 const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
@@ -1399,6 +1400,8 @@ router.get('/driver/scheduled', requireAuth, async (req, res) => {
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
+
+registerTripMessages(router, requireAuth, { dbGet, dbAll });
 
 // Get a single trip for owner polling (driver/passenger notification flows)
 router.get('/:tripId', requireAuth, async (req, res) => {

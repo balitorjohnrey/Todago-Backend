@@ -173,6 +173,101 @@ test('trip monitoring uses real isolated PostgreSQL migrations and transactions'
   t.after(f.close);
   t.beforeEach(f.seed);
 
+  await t.test('driver profiles are available to admins and scoped to the operator association', async () => {
+    await f.pg.exec(`UPDATE drivers SET email = 'driver@test.invalid', profile_photo_url = 'https://example.invalid/driver.jpg'
+      WHERE driver_id = 'driver-1';`);
+    const detail = (role, driverId, options = {}) => f.request(role,
+      role === 'admin' ? '/monitoring/drivers/:driverId' : '/analytics/drivers/:driverId',
+      { role, params: { driverId }, ...options });
+    const profile = await detail('admin', 'driver-1');
+    assert.equal(profile.code, 200);
+    assert.equal(profile.data.driver.email, 'driver@test.invalid');
+    assert.equal(profile.data.driver.profile_photo_url, 'https://example.invalid/driver.jpg');
+    assert.equal(profile.data.driver.plate_no, 'PLATE-1');
+    assert.equal(profile.data.driver.password_hash, undefined);
+    assert.equal(profile.data.driver.license_no, undefined);
+    assert.equal((await detail('admin', 'driver-2')).code, 200);
+    assert.equal((await detail('admin', 'driver-1', { role: 'passenger' })).code, 403);
+    assert.equal((await detail('operator', 'driver-1')).code, 200);
+    assert.equal((await detail('operator', 'driver-2')).code, 404);
+    await f.pg.exec("UPDATE operators SET toda_id = NULL WHERE operator_id = 'operator-1'");
+    assert.equal((await detail('operator', 'driver-1')).code, 404);
+  });
+
+  await t.test('assigned riders share a private trip log with retry-safe sending and closed-trip history', async () => {
+    const tripId = (await f.book()).data.trip.trip_id;
+    const thread = (role, options = {}) => f.request('trips', '/:tripId/messages', {
+      role, params: { tripId }, ...options,
+    });
+    const inbox = (role, options = {}) => f.request('trips', '/conversations', { role, ...options });
+    const send = (role, message, options = {}) => thread(role, {
+      method: 'post', body: { message, requestId: 'a'.repeat(32) }, ...options,
+    });
+
+    assert.equal((await inbox('passenger')).data.conversations.length, 0);
+    assert.equal((await send('passenger', 'Meet me at the gate.')).code, 409);
+    await f.database.dbRun("UPDATE trips SET status = 'accepted' WHERE trip_id = $1", [tripId]);
+    assert.equal((await inbox('passenger')).data.conversations[0].peer_name, 'Driver One');
+    assert.equal((await inbox('driver')).data.conversations[0].peer_name, 'Passenger One');
+    assert.equal((await thread('driver', { id: 'driver-2' })).code, 404);
+    assert.equal((await send('driver', 'Unauthorized', { id: 'driver-2' })).code, 404);
+    assert.equal((await inbox('passenger', { id: 'other-passenger' })).data.conversations.length, 0);
+    assert.equal((await thread('operator')).code, 403);
+    assert.equal((await send('driver', 'x'.repeat(501))).code, 422);
+
+    const replies = await Promise.all([
+      send('passenger', '  Meet me at the gate.  '),
+      send('passenger', 'Meet me at the gate.'),
+    ]);
+    assert.deepEqual(replies.map(reply => reply.code).sort(), [200, 201]);
+    assert.equal((await send('passenger', 'Different text with the same ID')).code, 409);
+    assert.equal((await send('driver', 'I am on my way.')).code, 201);
+    const history = await thread('commuter', { id: 'passenger-1' });
+    assert.equal(history.data.conversation.can_send, true);
+    assert.equal(history.data.messages.length, 2);
+    assert.equal(history.data.messages[0].sender_role, 'driver');
+    assert.equal(history.data.messages[0].body, 'I am on my way.');
+    assert.equal(history.data.messages[1].sender_role, 'passenger');
+    assert.equal(history.data.messages[1].body, 'Meet me at the gate.');
+
+    await f.database.dbRun("UPDATE trips SET status = 'completed' WHERE trip_id = $1", [tripId]);
+    assert.equal((await send('driver', 'I am on my way.')).code, 200);
+    assert.equal((await send('driver', 'Late message', {
+      body: { message: 'Late message', requestId: 'b'.repeat(32) },
+    })).code, 409);
+    const log = (await inbox('driver')).data.conversations[0];
+    assert.equal(log.can_send, false);
+    assert.equal(log.last_message, 'I am on my way.');
+    assert.equal((await thread('driver')).data.messages.length, 2);
+  });
+
+  await t.test('trip inbox and conversation pages include older history without duplicates', async () => {
+    await f.pg.exec(`
+      INSERT INTO trips (trip_id, commuter_id, driver_id, status)
+        SELECT 'trip-' || n, 'passenger-1', 'driver-1', 'completed' FROM generate_series(1, 31) n;
+      INSERT INTO trip_messages (trip_id, sender_role, request_id, body)
+        SELECT trip_id, 'driver', 'first', 'First message' FROM trips;
+      INSERT INTO trip_messages (trip_id, sender_role, request_id, body)
+        SELECT 'trip-1', 'passenger', n::text, 'Reply ' || n FROM generate_series(1, 41) n;`);
+    const inbox = query => f.request('trips', '/conversations', { role: 'passenger', query });
+    const thread = query => f.request('trips', '/:tripId/messages', {
+      role: 'driver', params: { tripId: 'trip-1' }, query,
+    });
+    const first = (await inbox({})).data;
+    const older = (await inbox(first.nextCursor)).data;
+    assert.equal(first.conversations.length, 30);
+    assert.equal(older.conversations.length, 1);
+    assert.equal(older.nextCursor, null);
+    assert.equal(new Set([...first.conversations, ...older.conversations].map(row => row.trip_id)).size, 31);
+    const recent = (await thread({})).data;
+    const oldest = (await thread({ before: recent.nextCursor })).data;
+    assert.equal(recent.messages.length, 40);
+    assert.equal(oldest.messages.length, 2);
+    assert.equal(oldest.messages.at(-1).body, 'First message');
+    assert.equal(oldest.nextCursor, null);
+    assert.equal((await thread({ before: '9999999999999999999' })).code, 422);
+  });
+
   await t.test('the fare type migration accepts Pregnant and preserves existing bookings', async () => {
     await f.pg.exec(`ALTER TABLE trips
       DROP CONSTRAINT trips_passenger_fare_type_check,

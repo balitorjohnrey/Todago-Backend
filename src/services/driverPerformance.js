@@ -30,6 +30,11 @@ async function syncDriverPerformance(client, driverId = null) {
   return client.query(SYNC_PERFORMANCE_SQL, [driverId]);
 }
 
+const DRIVER_VEHICLE = `LEFT JOIN LATERAL (
+  SELECT plate_no, vehicle_color FROM tricycles WHERE driver_id = d.driver_id
+  ORDER BY created_at DESC, tricycle_id LIMIT 1
+) t ON true`;
+
 async function getDriverPerformance(dbAll, { todaId = null, limit = 10 } = {}) {
   return dbAll(`
     SELECT d.driver_id, d.driver_name, d.toda_body_number, d.status,
@@ -39,10 +44,7 @@ async function getDriverPerformance(dbAll, { todaId = null, limit = 10 } = {}) {
     FROM performance_reports pr
     JOIN drivers d ON d.driver_id = pr.driver_id
     LEFT JOIN toda_associations ta ON ta.toda_id = d.toda_id
-    LEFT JOIN LATERAL (
-      SELECT plate_no FROM tricycles WHERE driver_id = d.driver_id
-      ORDER BY created_at DESC LIMIT 1
-    ) t ON true
+    ${DRIVER_VEHICLE}
     WHERE pr.report_scope = 'lifetime' AND d.is_active IS NOT FALSE
       AND ($1::text IS NULL OR d.toda_id = $1)
     ORDER BY pr.avg_rating DESC, pr.rating_count DESC, pr.total_trips DESC,
@@ -50,4 +52,16 @@ async function getDriverPerformance(dbAll, { todaId = null, limit = 10 } = {}) {
     LIMIT $2`, [todaId, limit]);
 }
 
-module.exports = { syncDriverPerformance, getDriverPerformance };
+async function getDriverPerformanceProfile(dbGet, driverId, todaId = null) {
+  return dbGet(`
+    SELECT d.driver_id, d.driver_name, d.profile_photo_url, d.phone, d.email,
+           d.toda_body_number, d.status, d.is_verified,
+           ta.association_name, t.plate_no, t.vehicle_color
+    FROM drivers d
+    LEFT JOIN toda_associations ta ON ta.toda_id = d.toda_id
+    ${DRIVER_VEHICLE}
+    WHERE d.driver_id = $1 AND d.is_active IS NOT FALSE
+      AND ($2::text IS NULL OR d.toda_id = $2)`, [driverId, todaId]);
+}
+
+module.exports = { syncDriverPerformance, getDriverPerformance, getDriverPerformanceProfile };

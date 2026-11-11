@@ -89,7 +89,7 @@ async function start() {
     console.log('[Wallet] Passenger QR pool ready:', qrPool.ready());
     const inventory = (await pool.query(`SELECT COUNT(*)::int AS total,
       (COUNT(*) FILTER (WHERE assigned_user_id IS NULL AND enabled = true))::int AS available
-      FROM wallet_qr_pool`)).rows[0];
+      FROM wallet_qr_pool WHERE retired_at IS NULL`)).rows[0];
     console.log('[Wallet] Passenger QR pool inventory:', JSON.stringify(inventory));
     console.log('[Wallet] Shared QR recovery:', JSON.stringify(await qrPool.recoverApprovedPayment()));
     console.log('[Wallet] In-store QR configuration ready:',

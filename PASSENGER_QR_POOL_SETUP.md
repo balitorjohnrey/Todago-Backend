@@ -16,14 +16,15 @@ therefore cannot be required for this product's automatic crediting.
 - Keep the live dashboard webhook subscribed to `payment.paid` at
   `https://todago-backend-production.up.railway.app/api/wallet/in-store-qr/webhook`.
   The MPM Wallet QR product's `qr.paid` event is a different contract.
-- On startup the immutable manifest `src/data/passengerQrPool.json` imports QR IDs,
-  internal labels and original-image SHA-256 checksums. It does not overwrite
-  existing assignments. The supplied organization ID is checked on each payment.
+- On startup `src/data/passengerQrPool.json` defines the current pool. Each
+  entry binds a QR ID and internal label to the SHA-256 checksum of the hosted
+  download. The supplied organization ID is checked on each payment.
 - Registration assigns one unused QR under a database lock. Lack of stock does
   not block registration. Existing passengers receive a permanent assignment on
   their first authenticated `GET /api/wallet/in-store-qr/passenger-qr`.
-- QR IDs and passenger IDs have unique database constraints. Assignments are
-  never released or reassigned. Clients cannot choose the account to credit.
+- Each passenger can have one current QR. A retired code keeps its original
+  owner for reconciliation, so a payment from a saved copy can still reach the
+  right wallet. Retired codes are excluded from new assignments.
 - Only a signed live, paid, unrefunded and undisputed PHP payment can credit.
   The amount comes from the payment, never from the phone or Done button. Amounts
   must be positive integer centavos within the existing PHP 50,000 server limit.
@@ -33,7 +34,7 @@ therefore cannot be required for this product's automatic crediting.
   A receipt arriving while a QR is unassigned never becomes a future passenger's
   credit, even after a duplicate delivery.
 - The app polls its own server every five seconds and on resume. This does not
-  poll PayMongo. The page stays in-app; Download QR saves the exact original image
+  poll PayMongo. The page stays in-app; Download QR saves the exact hosted image
   in Android Photos after verifying its checksum. Done returns to the wallet.
 - Old amount/reference creation routes are blocked in pool mode. Historical
   records and the one-time reset audit are retained. Do not change the existing
@@ -46,9 +47,23 @@ therefore cannot be required for this product's automatic crediting.
 2. Add the original JPGs, IDs and checksums to the separate QR site's allowlist
    and `dist/qr-pool.json`. Validate and publish that site first.
 3. Add the identical entries to the backend manifest, run tests and deploy.
-   Initialization adds only missing IDs. No API key is involved.
+   Keep the current entries in the manifest when adding stock.
 4. New registration/top-up requests can use the new stock. Empty stock leaves
    top-up unavailable and shows that a QR is being prepared.
+
+## Replacing the pool
+
+1. Verify each replacement decodes to the original payment data. Record the
+   checksums of the final downloadable images in both manifests.
+2. Publish a QR site version serving both sets of images during the rollout.
+3. Set `WALLET_QR_ROTATION_PRIORITY_EMAIL` on the backend service to reserve the
+   first available replacement for a specific active passenger. Deploy the
+   backend manifest with only the replacement entries. Startup imports the new
+   stock, retires the removed codes, and assigns replacements to eligible former
+   holders in their original assignment order after the priority passenger.
+4. Confirm the rotation and inventory in Railway startup logs. Publish the final
+   QR site version with only the replacement images and verify their download
+   checksums.
 
 ## Recovering the earlier shared-QR payment
 

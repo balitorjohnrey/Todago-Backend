@@ -9,6 +9,7 @@ const { PGlite } = require('@electric-sql/pglite');
 const { pgcrypto } = require('@electric-sql/pglite/contrib/pgcrypto');
 const { syncDriverPerformance } = require('../src/services/driverPerformance');
 const { distanceToRouteMeters, currentRouteLeg } = require('../src/utils/routeMonitoring');
+const qrManifest = require('../src/data/passengerQrPool.json');
 
 const road = [{ lat: 7.30, lng: 125.65 }, { lat: 7.30, lng: 125.70 }];
 
@@ -107,8 +108,61 @@ async function fixture() {
       ...overrides,
     } });
   }
-  return { pg, database, request, seed, book, load, initializer, close: () => pg.close() };
+  return { pg, database, request, seed, book, load, initializer, env, close: () => pg.close() };
 }
+
+test('startup rotates saved QRs atomically and preserves payment routing for retired codes', async t => {
+  const f = await fixture();
+  t.after(f.close);
+  const legacyAssigned = `qr_${'a'.repeat(24)}`;
+  const legacyUnused = `qr_${'b'.repeat(24)}`;
+  await f.pg.exec(`DELETE FROM wallet_qr_pool;
+    DROP INDEX wallet_qr_pool_current_user_idx;
+    ALTER TABLE wallet_qr_pool DROP COLUMN retired_at, ADD UNIQUE (assigned_user_id);
+    INSERT INTO users(id, full_name, email, phone, password_hash) VALUES
+      ('prior-holder', 'Prior Holder', 'prior@test.invalid', '0911', 'test'),
+      ('priority-holder', 'Priority Holder', 'Priority@test.invalid', '0922', 'test');`);
+  await f.pg.query(`INSERT INTO wallet_qr_pool (qr_id, label, image_sha256, assigned_user_id, assigned_at)
+    VALUES ($1, 'Prior QR', $3, 'prior-holder', NOW() - INTERVAL '1 day'),
+      ($2, 'Unused QR', $3, NULL, NULL)`, [legacyAssigned, legacyUnused, '0'.repeat(64)]);
+  await f.pg.query(`INSERT INTO wallet_transactions (user_id, type, provider, direction, amount, status,
+    provider_payment_id, pool_qr_id) VALUES ('prior-holder', 'topup', 'qrph', 'credit', 50, 'completed',
+    'pay_existing', $1)`, [legacyAssigned]);
+  Object.assign(f.env, { PAYMONGO_WALLET_QR_MODE: 'passenger_pool', PAYMONGO_INSTORE_WEBHOOK_SECRET: 'test-only',
+    WALLET_QR_ROTATION_PRIORITY_EMAIL: 'missing@test.invalid' });
+
+  await assert.rejects(f.initializer.initializeDatabase(), /must match one active passenger/);
+  assert.deepEqual((await f.pg.query('SELECT qr_id FROM wallet_qr_pool ORDER BY qr_id')).rows,
+    [{ qr_id: legacyAssigned }, { qr_id: legacyUnused }]);
+
+  f.env.WALLET_QR_ROTATION_PRIORITY_EMAIL = ' priority@test.invalid ';
+  await f.initializer.initializeDatabase();
+  await f.initializer.initializeDatabase();
+  const qrPool = f.load('services/passengerQrPool.js');
+  const assigned = await qrPool.getPassengerQr('priority-holder');
+  assert.equal(assigned.qrCodeId, qrManifest.entries[0].qrId);
+  assert.equal(assigned.qrImageSha256, qrManifest.entries[0].sha256);
+  assert.equal((await qrPool.getPassengerQr('prior-holder')).qrCodeId, qrManifest.entries[1].qrId);
+  const active = (await f.pg.query('SELECT qr_id FROM wallet_qr_pool WHERE retired_at IS NULL ORDER BY label')).rows;
+  assert.deepEqual(active.map(row => row.qr_id), qrManifest.entries.map(entry => entry.qrId));
+  const retired = (await f.pg.query(`SELECT qr_id, assigned_user_id, enabled FROM wallet_qr_pool
+    WHERE retired_at IS NOT NULL ORDER BY qr_id`)).rows;
+  assert.deepEqual(retired, [
+    { qr_id: legacyAssigned, assigned_user_id: 'prior-holder', enabled: true },
+    { qr_id: legacyUnused, assigned_user_id: null, enabled: false },
+  ]);
+  assert.equal((await f.pg.query(`SELECT amount FROM wallet_transactions
+    WHERE provider_payment_id = 'pay_existing' AND pool_qr_id = $1`, [legacyAssigned])).rows[0].amount, '50.00');
+
+  const event = { id: 'evt_retired_qr', type: 'event', attributes: { type: 'payment.paid', livemode: true,
+    data: { id: 'pay_retired_qr', type: 'payment', attributes: { amount: 2000, currency: 'PHP', status: 'paid',
+      livemode: true, origin: 'instore_qrph', organization_id: qrManifest.organizationId,
+      source: { type: 'qrph', provider: { code_id: legacyAssigned } }, paid_at: Math.floor(Date.now() / 1000) } } } };
+  assert.equal(await qrPool.receivePaidEvent(event), true);
+  assert.equal(await qrPool.receivePaidEvent(event), true);
+  assert.deepEqual((await f.pg.query(`SELECT user_id, pool_qr_id FROM wallet_transactions
+    WHERE provider_payment_id = 'pay_retired_qr'`)).rows, [{ user_id: 'prior-holder', pool_qr_id: legacyAssigned }]);
+});
 
 test('trip monitoring uses real isolated PostgreSQL migrations and transactions', async t => {
   const f = await fixture();

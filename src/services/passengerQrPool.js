@@ -7,8 +7,8 @@ const error = (message, statusCode = 422) => Object.assign(new Error(message), {
 const enabled = () => process.env.PAYMONGO_WALLET_QR_MODE === 'passenger_pool';
 const ready = () => enabled() && Boolean(process.env.PAYMONGO_INSTORE_WEBHOOK_SECRET?.trim());
 
-async function transaction(action) {
-  const client = await pool.connect();
+async function transaction(action, connection) {
+  const client = connection || await pool.connect();
   try {
     await client.query('BEGIN');
     const result = await action(client);
@@ -17,20 +17,35 @@ async function transaction(action) {
   } catch (cause) {
     await client.query('ROLLBACK');
     throw cause;
-  } finally { client.release(); }
+  } finally { if (!connection) client.release(); }
 }
 
 async function initialize(client) {
+  const rotation = await transaction(async connection => {
+    await lockPool(connection);
+    await initializePool(connection);
+    return rotateRemovedCodes(connection);
+  }, client);
+  if (rotation) console.log('[Wallet] Passenger QR rotation:', JSON.stringify(rotation));
+}
+
+async function initializePool(client) {
   await client.query(`CREATE TABLE IF NOT EXISTS wallet_qr_pool (
     qr_id TEXT PRIMARY KEY,
     label TEXT NOT NULL UNIQUE,
     image_sha256 TEXT NOT NULL CHECK (image_sha256 ~ '^[a-f0-9]{64}$'),
-    assigned_user_id TEXT UNIQUE REFERENCES users(id),
+    assigned_user_id TEXT REFERENCES users(id),
     assigned_at TIMESTAMPTZ,
     enabled BOOLEAN NOT NULL DEFAULT true,
+    retired_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK ((assigned_user_id IS NULL) = (assigned_at IS NULL))
   )`);
+  await client.query(`ALTER TABLE wallet_qr_pool
+    ADD COLUMN IF NOT EXISTS retired_at TIMESTAMPTZ,
+    DROP CONSTRAINT IF EXISTS wallet_qr_pool_assigned_user_id_key`);
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS wallet_qr_pool_current_user_idx
+    ON wallet_qr_pool(assigned_user_id) WHERE retired_at IS NULL`);
   await client.query(`ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS
     pool_qr_id TEXT REFERENCES wallet_qr_pool(qr_id)`);
   await client.query(`ALTER TABLE merchant_qr_payments ADD COLUMN IF NOT EXISTS pool_user_id TEXT REFERENCES users(id)`);
@@ -52,13 +67,59 @@ async function initialize(client) {
     if (existing.label !== entry.label || existing.image_sha256 !== entry.sha256) {
       throw new Error('An imported QR cannot be replaced with a different image or label.');
     }
+    if (existing.retired_at) throw new Error('A retired passenger QR cannot be imported again.');
   }
+}
+
+async function rotateRemovedCodes(client) {
+  // Retired assignments remain available to the webhook so a previously
+  // downloaded code always credits its original wallet while enabled.
+  const retired = (await client.query(`UPDATE wallet_qr_pool
+    SET retired_at = NOW(), enabled = enabled AND assigned_user_id IS NOT NULL
+    WHERE retired_at IS NULL AND NOT (qr_id = ANY($1::text[])) RETURNING qr_id`,
+  [manifest.entries.map(entry => entry.qrId)])).rows;
+  if (retired.length === 0) return null;
+
+  const priorityEmail = process.env.WALLET_QR_ROTATION_PRIORITY_EMAIL?.trim().toLowerCase() || null;
+  const recipients = (await client.query(`SELECT u.id, COALESCE(LOWER(u.email) = $2, false) AS priority
+    FROM users u LEFT JOIN wallet_qr_pool old
+      ON old.assigned_user_id = u.id AND old.qr_id = ANY($1::text[])
+    WHERE u.is_active = true AND u.role IN ('passenger','commuter')
+      AND (old.qr_id IS NOT NULL OR LOWER(u.email) = $2)
+    ORDER BY priority DESC, old.assigned_at, u.id FOR UPDATE OF u`,
+  [retired.map(row => row.qr_id), priorityEmail])).rows;
+  if (priorityEmail && recipients.filter(recipient => recipient.priority).length !== 1) {
+    throw new Error('QR rotation priority account must match one active passenger.');
+  }
+
+  const summary = { retired: retired.length, assigned: 0, waiting: 0, priorityQrId: null };
+  for (const recipient of recipients) {
+    const replacement = await assignCurrentCode(client, recipient.id);
+    if (recipient.priority) {
+      if (!replacement?.enabled) throw new Error('The priority account needs an available QR for rotation.');
+      summary.priorityQrId = replacement.qr_id;
+    }
+    if (replacement?.enabled) summary.assigned++;
+    else summary.waiting++;
+  }
+  return summary;
 }
 
 // Assignment and receipt ingestion share this lock: a payment received before
 // assignment must never become a later passenger's money.
 async function lockPool(client) {
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('todago-passenger-qr-pool', 0))`);
+}
+
+async function assignCurrentCode(client, userId) {
+  const current = (await client.query(`SELECT * FROM wallet_qr_pool
+    WHERE assigned_user_id = $1 AND retired_at IS NULL`, [userId])).rows[0];
+  if (current) return current;
+  const unused = (await client.query(`SELECT * FROM wallet_qr_pool WHERE assigned_user_id IS NULL
+    AND enabled = true AND retired_at IS NULL ORDER BY label, qr_id LIMIT 1 FOR UPDATE`)).rows[0];
+  if (!unused) return null;
+  return (await client.query(`UPDATE wallet_qr_pool SET assigned_user_id = $2, assigned_at = clock_timestamp()
+    WHERE qr_id = $1 RETURNING *`, [unused.qr_id, userId])).rows[0];
 }
 
 async function assign(userId) {
@@ -68,13 +129,7 @@ async function assign(userId) {
     const owner = (await client.query(`SELECT id FROM users WHERE id = $1
       AND is_active = true AND role IN ('passenger','commuter') FOR UPDATE`, [userId])).rows[0];
     if (!owner) throw error('Passenger account is unavailable.', 403);
-    const current = (await client.query('SELECT * FROM wallet_qr_pool WHERE assigned_user_id = $1', [userId])).rows[0];
-    if (current) return current;
-    const unused = (await client.query(`SELECT * FROM wallet_qr_pool WHERE assigned_user_id IS NULL
-      AND enabled = true ORDER BY label, qr_id LIMIT 1 FOR UPDATE`, [])).rows[0];
-    if (!unused) return null;
-    return (await client.query(`UPDATE wallet_qr_pool SET assigned_user_id = $2, assigned_at = NOW()
-      WHERE qr_id = $1 AND assigned_user_id IS NULL RETURNING *`, [unused.qr_id, userId])).rows[0];
+    return assignCurrentCode(client, userId);
   });
 }
 

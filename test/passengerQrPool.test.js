@@ -13,14 +13,16 @@ function setup() {
   async function query(text, values = []) {
     const sql = text.replace(/\s+/g, ' ').trim();
     let rows = [];
-    if (/^(CREATE|ALTER)/.test(sql) || sql.startsWith('SELECT pg_advisory')) return { rows };
+    if (/^(CREATE|ALTER|BEGIN|COMMIT|ROLLBACK)/.test(sql) || sql.startsWith('SELECT pg_advisory')) return { rows };
     if (sql.startsWith('INSERT INTO wallet_qr_pool')) {
       if (!state.qrs.some(q => q.qr_id === values[0])) state.qrs.push({ qr_id: values[0], label: values[1], image_sha256: values[2], assigned_user_id: null, assigned_at: null, enabled: true });
     } else if (sql.startsWith('SELECT * FROM wallet_qr_pool')) {
       rows = state.qrs.filter(q => sql.includes('qr_id = $1') ? q.qr_id === values[0]
         : sql.includes('assigned_user_id = $1') ? q.assigned_user_id === values[0] : !q.assigned_user_id && q.enabled).sort((a,b) => a.label.localeCompare(b.label));
       if (sql.includes('LIMIT 1')) rows = rows.slice(0,1);
-    } else if (sql.startsWith('UPDATE wallet_qr_pool')) {
+    } else if (sql.startsWith('UPDATE wallet_qr_pool SET retired_at')) {
+      assert.ok(state.qrs.every(q => values[0].includes(q.qr_id)));
+    } else if (sql.startsWith('UPDATE wallet_qr_pool SET assigned_user_id')) {
       const qr = state.qrs.find(q => q.qr_id === values[0]);
       assert.equal(qr.assigned_user_id, null);
       assert.ok(!state.qrs.some(q => q.assigned_user_id === values[1]));

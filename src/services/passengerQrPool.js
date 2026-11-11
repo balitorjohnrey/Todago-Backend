@@ -5,7 +5,9 @@ const { MAX_AMOUNT } = require('./paymentLimits');
 const SITE = 'https://todago-qrph.johnmejio11.chatgpt.site';
 const error = (message, statusCode = 422) => Object.assign(new Error(message), { statusCode });
 const enabled = () => process.env.PAYMONGO_WALLET_QR_MODE === 'passenger_pool';
-const ready = () => enabled() && Boolean(process.env.PAYMONGO_INSTORE_WEBHOOK_SECRET?.trim());
+const currentWebhookSecret = () => process.env.PAYMONGO_INSTORE_POOL_WEBHOOK_SECRET?.trim() || null;
+const isCurrentOrganization = event => event?.attributes?.data?.attributes?.organization_id === manifest.organizationId;
+const ready = () => enabled() && Boolean(currentWebhookSecret());
 
 async function transaction(action, connection) {
   const client = connection || await pool.connect();
@@ -34,6 +36,7 @@ async function initializePool(client) {
     qr_id TEXT PRIMARY KEY,
     label TEXT NOT NULL UNIQUE,
     image_sha256 TEXT NOT NULL CHECK (image_sha256 ~ '^[a-f0-9]{64}$'),
+    organization_id TEXT NOT NULL,
     assigned_user_id TEXT REFERENCES users(id),
     assigned_at TIMESTAMPTZ,
     enabled BOOLEAN NOT NULL DEFAULT true,
@@ -43,7 +46,12 @@ async function initializePool(client) {
   )`);
   await client.query(`ALTER TABLE wallet_qr_pool
     ADD COLUMN IF NOT EXISTS retired_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS organization_id TEXT,
     DROP CONSTRAINT IF EXISTS wallet_qr_pool_assigned_user_id_key`);
+  await client.query(`UPDATE wallet_qr_pool SET organization_id =
+    CASE WHEN qr_id = ANY($1::text[]) THEN $2 ELSE $3 END WHERE organization_id IS NULL`,
+  [manifest.entries.map(entry => entry.qrId), manifest.organizationId, manifest.legacyOrganizationId]);
+  await client.query('ALTER TABLE wallet_qr_pool ALTER COLUMN organization_id SET NOT NULL');
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS wallet_qr_pool_current_user_idx
     ON wallet_qr_pool(assigned_user_id) WHERE retired_at IS NULL`);
   await client.query(`ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS
@@ -61,12 +69,14 @@ async function initializePool(client) {
     if (!/^qr_[a-z0-9]{24}$/.test(entry.qrId) || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
       throw new Error('Invalid passenger QR pool manifest.');
     }
-    await client.query(`INSERT INTO wallet_qr_pool (qr_id, label, image_sha256)
-      VALUES ($1,$2,$3) ON CONFLICT (qr_id) DO NOTHING`, [entry.qrId, entry.label, entry.sha256]);
+    await client.query(`INSERT INTO wallet_qr_pool (qr_id, label, image_sha256, organization_id)
+      VALUES ($1,$2,$3,$4) ON CONFLICT (qr_id) DO NOTHING`,
+    [entry.qrId, entry.label, entry.sha256, manifest.organizationId]);
     const existing = (await client.query('SELECT * FROM wallet_qr_pool WHERE qr_id = $1', [entry.qrId])).rows[0];
     if (existing.label !== entry.label || existing.image_sha256 !== entry.sha256) {
       throw new Error('An imported QR cannot be replaced with a different image or label.');
     }
+    if (existing.organization_id !== manifest.organizationId) throw new Error('An imported QR cannot change organizations.');
     if (existing.retired_at) throw new Error('A retired passenger QR cannot be imported again.');
   }
 }
@@ -149,24 +159,25 @@ async function getPassengerQr(userId) {
 }
 
 async function receivePaidEvent(event) {
-  if (!ready()) throw error('Passenger QR configuration is unavailable.', 503);
+  if (!enabled()) throw error('Passenger QR configuration is unavailable.', 503);
   if (event?.type !== 'event' || event.attributes?.type !== 'payment.paid') return false;
   const payment = event.attributes.data;
   const attrs = payment?.attributes;
   const qrId = attrs?.source?.provider?.code_id;
   if (event.attributes.livemode !== true || attrs?.livemode !== true ||
       attrs?.source?.type !== 'qrph' || attrs.origin !== 'instore_qrph' ||
-      attrs.organization_id !== manifest.organizationId || !/^qr_[a-z0-9]{24}$/.test(qrId || '')) return false;
+      ![manifest.organizationId, manifest.legacyOrganizationId].includes(attrs.organization_id) ||
+      !/^qr_[a-z0-9]{24}$/.test(qrId || '')) return false;
   if (!/^evt_[A-Za-z0-9_-]+$/.test(event.id || '') || payment?.type !== 'payment' ||
       !/^pay_[A-Za-z0-9_-]+$/.test(payment?.id || '') || attrs.status !== 'paid' || attrs.currency !== 'PHP' ||
       !Number.isSafeInteger(attrs.amount) || attrs.amount <= 0 || attrs.amount > MAX_AMOUNT * 100 ||
       attrs.disputed === true || (attrs.refunds?.length || 0) > 0) throw error('Invalid live payment event.');
   const paidAt = Number.isSafeInteger(attrs.paid_at) && attrs.paid_at > 0 &&
     attrs.paid_at * 1000 <= Date.now() + 300000 ? new Date(attrs.paid_at * 1000) : null;
-  return transaction(async client => {
+  const result = await transaction(async client => {
     await lockPool(client);
     const assigned = (await client.query('SELECT * FROM wallet_qr_pool WHERE qr_id = $1', [qrId])).rows[0];
-    if (!assigned) return false;
+    if (!assigned || assigned.organization_id !== attrs.organization_id) return false;
     await client.query(`INSERT INTO merchant_qr_payments
       (payment_id, event_id, qr_id, reference, amount_cents, paid_at, pool_user_id)
       VALUES ($1,$2,$3,NULL,$4,$5,$6) ON CONFLICT (payment_id) DO NOTHING`,
@@ -202,8 +213,10 @@ async function receivePaidEvent(event) {
     [assigned.assigned_user_id, attrs.amount / 100, qrId, payment.id, paidAt])).rows[0];
     await client.query(`UPDATE merchant_qr_payments SET claimed_transaction_id = $2, review_reason = NULL
       WHERE payment_id = $1 AND claimed_transaction_id IS NULL`, [payment.id, row.transaction_id]);
-    return true;
+    return { paymentId: payment.id, qrCodeId: qrId, transactionId: row.transaction_id, amountCents: attrs.amount };
   });
+  if (result?.transactionId) console.log('[Wallet] Passenger QR payment credited:', JSON.stringify(result));
+  return Boolean(result);
 }
 
 // Explicit operator request for the previously paid, shared-QR transaction.
@@ -247,4 +260,5 @@ async function recoverApprovedPayment() {
   });
 }
 
-module.exports = { enabled, ready, initialize, assign, getPassengerQr, receivePaidEvent, recoverApprovedPayment };
+module.exports = { enabled, ready, currentWebhookSecret, isCurrentOrganization,
+  initialize, assign, getPassengerQr, receivePaidEvent, recoverApprovedPayment };

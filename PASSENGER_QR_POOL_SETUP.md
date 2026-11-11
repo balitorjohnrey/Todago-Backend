@@ -10,15 +10,18 @@ therefore cannot be required for this product's automatic crediting.
 
 ## Operation
 
-- `PAYMONGO_WALLET_QR_MODE=passenger_pool` selects this flow. The endpoint-specific
-  `PAYMONGO_INSTORE_WEBHOOK_SECRET` verifies live raw-body signatures, with the
-  existing five-minute signature timestamp tolerance. Keep that secret in Railway.
+- `PAYMONGO_WALLET_QR_MODE=passenger_pool` selects this flow. Set
+  `PAYMONGO_INSTORE_POOL_WEBHOOK_SECRET` on **Todago-Backend** to the current
+  account's endpoint signing secret. The existing `PAYMONGO_INSTORE_WEBHOOK_SECRET`
+  verifies prior-account deliveries. The receiver uses each secret for its own
+  organization and applies a five-minute signature timestamp tolerance.
 - Keep the live dashboard webhook subscribed to `payment.paid` at
   `https://todago-backend-production.up.railway.app/api/wallet/in-store-qr/webhook`.
   The MPM Wallet QR product's `qr.paid` event is a different contract.
 - On startup `src/data/passengerQrPool.json` defines the current pool. Each
   entry binds a QR ID and internal label to the SHA-256 checksum of the hosted
-  download. The supplied organization ID is checked on each payment.
+  download and the issuing PayMongo organization. Payments must match the
+  organization recorded for the QR, including retired codes.
 - Registration assigns one unused QR under a database lock. Lack of stock does
   not block registration. Existing passengers receive a permanent assignment on
   their first authenticated `GET /api/wallet/in-store-qr/passenger-qr`.

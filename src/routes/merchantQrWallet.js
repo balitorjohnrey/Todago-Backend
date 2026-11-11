@@ -43,14 +43,18 @@ router.post('/top-ups/:transactionId/reference', requireAuth, passenger, referen
   endpoint(req => service.submitReference(req.userId, req.params.transactionId, req.body.reference)));
 
 router.post('/webhook', async (req, res) => {
-  if (!service.verifyLiveSignature(req.rawBody, req.get('Paymongo-Signature'))) {
+  const event = req.body?.data;
+  const poolMode = qrPool.enabled();
+  const currentOrganization = poolMode && qrPool.isCurrentOrganization(event);
+  const secret = currentOrganization ? qrPool.currentWebhookSecret() : undefined;
+  if (!service.verifyLiveSignature(req.rawBody, req.get('Paymongo-Signature'), Date.now(), secret)) {
     return res.status(401).json({ success: false, message: 'Invalid webhook signature' });
   }
   try {
-    const handled = qrPool.enabled()
-      ? await qrPool.receivePaidEvent(req.body?.data) ||
-        (service.configuration().ready && await service.receivePaidEvent(req.body?.data))
-      : await service.receivePaidEvent(req.body?.data);
+    const handled = poolMode
+      ? await qrPool.receivePaidEvent(event) ||
+        (!currentOrganization && service.configuration().ready && await service.receivePaidEvent(event))
+      : await service.receivePaidEvent(event);
     if (handled) await qrPool.recoverApprovedPayment();
     return res.json({ success: true, ignored: !handled });
   } catch (error) {

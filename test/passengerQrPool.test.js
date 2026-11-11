@@ -15,11 +15,13 @@ function setup() {
     let rows = [];
     if (/^(CREATE|ALTER|BEGIN|COMMIT|ROLLBACK)/.test(sql) || sql.startsWith('SELECT pg_advisory')) return { rows };
     if (sql.startsWith('INSERT INTO wallet_qr_pool')) {
-      if (!state.qrs.some(q => q.qr_id === values[0])) state.qrs.push({ qr_id: values[0], label: values[1], image_sha256: values[2], assigned_user_id: null, assigned_at: null, enabled: true });
+      if (!state.qrs.some(q => q.qr_id === values[0])) state.qrs.push({ qr_id: values[0], label: values[1], image_sha256: values[2], organization_id: values[3], assigned_user_id: null, assigned_at: null, enabled: true });
     } else if (sql.startsWith('SELECT * FROM wallet_qr_pool')) {
       rows = state.qrs.filter(q => sql.includes('qr_id = $1') ? q.qr_id === values[0]
         : sql.includes('assigned_user_id = $1') ? q.assigned_user_id === values[0] : !q.assigned_user_id && q.enabled).sort((a,b) => a.label.localeCompare(b.label));
       if (sql.includes('LIMIT 1')) rows = rows.slice(0,1);
+    } else if (sql.startsWith('UPDATE wallet_qr_pool SET organization_id')) {
+      assert.ok(state.qrs.every(q => q.organization_id));
     } else if (sql.startsWith('UPDATE wallet_qr_pool SET retired_at')) {
       assert.ok(state.qrs.every(q => values[0].includes(q.qr_id)));
     } else if (sql.startsWith('UPDATE wallet_qr_pool SET assigned_user_id')) {
@@ -79,7 +81,8 @@ function setup() {
       return query(sql, values);
     } };
   } };
-  const env = new Proxy({ PAYMONGO_WALLET_QR_MODE: 'passenger_pool', PAYMONGO_INSTORE_WEBHOOK_SECRET: 'unit-test-signing-secret' }, {
+  const env = new Proxy({ PAYMONGO_WALLET_QR_MODE: 'passenger_pool', PAYMONGO_INSTORE_WEBHOOK_SECRET: 'legacy-test-secret',
+    PAYMONGO_INSTORE_POOL_WEBHOOK_SECRET: 'current-test-secret' }, {
     get(target, key) { if (key === 'PAYMONGO_SECRET_KEY') throw new Error('An API key must never be read'); return target[key]; },
   });
   const filename = path.join(__dirname, '../src/services/passengerQrPool.js');
@@ -137,6 +140,9 @@ test('test, wrong-organization, unknown-QR and invalid payments cannot create cr
     const e = event(); mutate(e); assert.equal(await service.receivePaidEvent(e), false);
   }
   assert.equal(await service.receivePaidEvent(event('qr_' + 'a'.repeat(24))), false);
+  const legacyOrganization = event();
+  legacyOrganization.attributes.data.attributes.organization_id = manifest.legacyOrganizationId;
+  assert.equal(await service.receivePaidEvent(legacyOrganization), false);
   for (const amount of [0,-1,20.001,5000001]) await assert.rejects(service.receivePaidEvent(event(undefined, 'invalid', amount)));
   for (const mutate of [a => a.status = 'pending', a => a.currency = 'USD', a => a.disputed = true, a => a.refunds = [{}]]) {
     const e = event(); mutate(e.attributes.data.attributes); await assert.rejects(service.receivePaidEvent(e));
@@ -190,13 +196,14 @@ test('owner-approved shared-QR recovery needs the verified inbox, exact benefici
 });
 
 test('HTTP pool routes bind assignments to authentication, reject legacy creation, and verify webhooks before settlement', async t => {
-  const { service, state, pool } = setup(); await service.initialize(pool);
+  const { service, state, pool, env } = setup(); await service.initialize(pool);
   const filename = path.join(__dirname, '../src/routes/merchantQrWallet.js');
   const module = { exports: {} }, realRequire = createRequire(filename);
   const stubs = {
     '../services/passengerQrPool': service,
     '../services/merchantQrWallet': {
-      verifyLiveSignature: (raw, signature) => Buffer.isBuffer(raw) && signature === 'unit-live-signature',
+      verifyLiveSignature: (raw, signature, _now, secret = env.PAYMONGO_INSTORE_WEBHOOK_SECRET) =>
+        Buffer.isBuffer(raw) && secret !== null && signature === `signed-with-${secret}`,
       receivePaidEvent: async () => false,
     },
     './auth': { requireAuth(req, res, next) {
@@ -223,9 +230,20 @@ test('HTTP pool routes bind assignments to authentication, reject legacy creatio
   assert.equal(state.qrs.find(q => q.qr_id === alice.qrCodeId).assigned_user_id, 'alice');
   const post = (target, body, headers = {}) => fetch(base + target, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   assert.equal((await post('/top-ups', { amount: 20 }, { authorization: 'Bearer alice' })).status, 409);
-  const paid = { data: event(bob.qrCodeId) };
+  const paid = { data: event(bob.qrCodeId, 'one_peso', 100) };
   assert.equal((await post('/webhook', paid)).status, 401);
+  const priorKey = { 'paymongo-signature': 'signed-with-legacy-test-secret' };
+  assert.equal((await post('/webhook', paid, priorKey)).status, 401);
+  const currentKey = { 'paymongo-signature': 'signed-with-current-test-secret' };
+  delete env.PAYMONGO_INSTORE_POOL_WEBHOOK_SECRET;
+  assert.equal((await post('/webhook', paid, priorKey)).status, 401);
   assert.equal(state.wallets.length, 0);
-  assert.equal((await post('/webhook', paid, { 'paymongo-signature': 'unit-live-signature' })).status, 200);
-  assert.equal(state.wallets.length, 1); assert.equal(state.wallets[0].user_id, 'bob');
+  env.PAYMONGO_INSTORE_POOL_WEBHOOK_SECRET = 'current-test-secret';
+  for (let delivery = 0; delivery < 2; delivery++) {
+    assert.equal((await post('/webhook', paid, currentKey)).status, 200);
+  }
+  assert.equal(state.wallets.length, 1);
+  assert.equal(state.wallets[0].user_id, 'bob');
+  assert.equal(state.wallets[0].amount, 1);
+  assert.equal((await get('/passenger-qr', 'Bearer bob').then(res => res.json())).latestPayment.paymentId, 'pay_one_peso');
 });

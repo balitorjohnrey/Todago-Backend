@@ -127,6 +127,12 @@ test('merchant QR webhook-only top-ups', async t => {
     const sign = (body, time = timestamp) => `t=${time},te=,li=` + crypto.createHmac('sha256', process.env.PAYMONGO_INSTORE_WEBHOOK_SECRET).update(`${time}.`).update(body).digest('hex');
     assert.equal(service.configuration().ready, true);
     assert.equal(service.verifyLiveSignature(raw, sign(raw), now), true);
+    const secondKey = 'another-webhook-secret';
+    const secondSignature = `t=${timestamp},te=,li=` + crypto.createHmac('sha256', secondKey)
+      .update(`${timestamp}.`).update(raw).digest('hex');
+    assert.equal(service.verifyLiveSignature(raw, secondSignature, now, secondKey), true);
+    assert.equal(service.verifyLiveSignature(raw, sign(raw), now, secondKey), false);
+    assert.equal(service.verifyLiveSignature(raw, sign(raw), now, null), false);
     assert.equal(service.verifyLiveSignature(Buffer.from('{}'), sign(raw), now), false);
     assert.equal(service.verifyLiveSignature(raw, sign(raw, timestamp - 301), now), false);
     assert.equal(service.verifyLiveSignature(raw, sign(raw, timestamp + 301), now), false);

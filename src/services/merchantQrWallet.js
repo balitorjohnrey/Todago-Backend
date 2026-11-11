@@ -30,8 +30,7 @@ function requireConfiguration() {
 
 // This endpoint has its own signing secret and live-mode check. It neither
 // reads a PayMongo API key nor changes the authentication of older checkouts.
-function verifyLiveSignature(rawBody, signature, now = Date.now()) {
-  const { secret } = configuration();
+function verifyLiveSignature(rawBody, signature, now = Date.now(), secret = configuration().secret) {
   if (!secret || !Buffer.isBuffer(rawBody) || typeof signature !== 'string') return false;
   const entries = signature.split(',').map(part => part.trim().split('='));
   if (entries.some(entry => entry.length !== 2)) return false;

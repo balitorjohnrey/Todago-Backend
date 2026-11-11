@@ -118,7 +118,7 @@ test('startup rotates saved QRs atomically and preserves payment routing for ret
   const legacyUnused = `qr_${'b'.repeat(24)}`;
   await f.pg.exec(`DELETE FROM wallet_qr_pool;
     DROP INDEX wallet_qr_pool_current_user_idx;
-    ALTER TABLE wallet_qr_pool DROP COLUMN retired_at, ADD UNIQUE (assigned_user_id);
+    ALTER TABLE wallet_qr_pool DROP COLUMN retired_at, DROP COLUMN organization_id, ADD UNIQUE (assigned_user_id);
     INSERT INTO users(id, full_name, email, phone, password_hash) VALUES
       ('prior-holder', 'Prior Holder', 'prior@test.invalid', '0911', 'test'),
       ('priority-holder', 'Priority Holder', 'Priority@test.invalid', '0922', 'test');`);
@@ -129,7 +129,7 @@ test('startup rotates saved QRs atomically and preserves payment routing for ret
     provider_payment_id, pool_qr_id) VALUES ('prior-holder', 'topup', 'qrph', 'credit', 50, 'completed',
     'pay_existing', $1)`, [legacyAssigned]);
   Object.assign(f.env, { PAYMONGO_WALLET_QR_MODE: 'passenger_pool', PAYMONGO_INSTORE_WEBHOOK_SECRET: 'test-only',
-    WALLET_QR_ROTATION_PRIORITY_EMAIL: 'missing@test.invalid' });
+    PAYMONGO_INSTORE_POOL_WEBHOOK_SECRET: 'test-current', WALLET_QR_ROTATION_PRIORITY_EMAIL: 'missing@test.invalid' });
 
   await assert.rejects(f.initializer.initializeDatabase(), /must match one active passenger/);
   assert.deepEqual((await f.pg.query('SELECT qr_id FROM wallet_qr_pool ORDER BY qr_id')).rows,
@@ -158,6 +158,8 @@ test('startup rotates saved QRs atomically and preserves payment routing for ret
     data: { id: 'pay_retired_qr', type: 'payment', attributes: { amount: 2000, currency: 'PHP', status: 'paid',
       livemode: true, origin: 'instore_qrph', organization_id: qrManifest.organizationId,
       source: { type: 'qrph', provider: { code_id: legacyAssigned } }, paid_at: Math.floor(Date.now() / 1000) } } } };
+  assert.equal(await qrPool.receivePaidEvent(event), false);
+  event.attributes.data.attributes.organization_id = qrManifest.legacyOrganizationId;
   assert.equal(await qrPool.receivePaidEvent(event), true);
   assert.equal(await qrPool.receivePaidEvent(event), true);
   assert.deepEqual((await f.pg.query(`SELECT user_id, pool_qr_id FROM wallet_transactions

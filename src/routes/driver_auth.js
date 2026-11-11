@@ -881,11 +881,10 @@ router.put('/status', requireDriverAuth, [
 
     const lat = parseFiniteNumber(req.body.lat);
     const lng = parseFiniteNumber(req.body.lng);
-    if (req.body.status !== 'offline' && lat !== null && lng !== null) {
-      await recordDriverGpsLocation(req.driverId, lat, lng);
-    }
+    const serviceArea = req.body.status !== 'offline' && lat !== null && lng !== null
+      ? await recordDriverGpsLocation(req.driverId, lat, lng) : null;
 
-    return res.json({ success: true, message: `Status: ${req.body.status}` });
+    return res.json({ success: true, message: `Status: ${req.body.status}`, service_area: serviceArea });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to update status' });
   }
@@ -927,19 +926,39 @@ router.put('/location', requireDriverAuth, [
       });
     }
 
-    const saved = await recordDriverGpsLocation(
+    const serviceArea = await recordDriverGpsLocation(
       req.driverId,
       parseFloat(req.body.lat),
       parseFloat(req.body.lng)
     );
 
-    if (!saved) {
-      return res.status(404).json({ success: false, message: 'Tricycle not found' });
-    }
-
-    return res.json({ success: true, message: 'Driver location updated' });
+    return res.json({ success: true, message: 'Driver location updated', service_area: serviceArea });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to update location' });
+  }
+});
+
+router.get('/messages', requireDriverAuth, async (req, res) => {
+  try {
+    const messages = await dbAll(`SELECT message_id, body, created_at, read_at
+      FROM driver_messages WHERE driver_id = $1
+      ORDER BY (read_at IS NOT NULL), created_at DESC, message_id DESC LIMIT 50`, [req.driverId]);
+    return res.json({ success: true, messages });
+  } catch (error) {
+    console.error('[Driver] Inbox error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to load messages' });
+  }
+});
+
+router.patch('/messages/:messageId/read', requireDriverAuth, async (req, res) => {
+  try {
+    const read = await dbGet(`UPDATE driver_messages SET read_at = COALESCE(read_at, NOW())
+      WHERE driver_id = $1 AND message_id = $2 RETURNING read_at`, [req.driverId, req.params.messageId]);
+    if (!read) return res.status(404).json({ success: false, message: 'Message not found' });
+    return res.json({ success: true, read_at: read.read_at });
+  } catch (error) {
+    console.error('[Driver] Read message error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to mark the message as read' });
   }
 });
 

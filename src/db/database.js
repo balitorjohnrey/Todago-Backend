@@ -885,6 +885,18 @@ async function initializeDatabase() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_gps_locations_trip_timestamp
       ON gps_locations(trip_id, timestamp DESC, location_id DESC)`);
 
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_messages (
+      message_id TEXT PRIMARY KEY,
+      driver_id TEXT NOT NULL REFERENCES drivers(driver_id) ON DELETE CASCADE,
+      sender_admin_id TEXT NOT NULL,
+      gps_location_id TEXT REFERENCES gps_locations(location_id) ON DELETE SET NULL,
+      body TEXT NOT NULL CHECK (CHAR_LENGTH(BTRIM(body)) BETWEEN 1 AND 500),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      read_at TIMESTAMPTZ
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_messages_inbox
+      ON driver_messages(driver_id, (read_at IS NOT NULL), created_at DESC, message_id DESC)`);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS performance_reports (
         report_id     TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,

@@ -2,66 +2,6 @@ const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet } = require('../db/database');
 const defaultDatabase = { dbRun, dbGet };
 
-const DEFAULT_SERVICE_AREAS = [
-  {
-    name: 'Panabo City',
-    minLat: 7.16,
-    maxLat: 7.42,
-    minLng: 125.52,
-    maxLng: 125.86,
-  },
-  {
-    name: 'Carmen',
-    minLat: 7.28,
-    maxLat: 7.56,
-    minLng: 125.52,
-    maxLng: 125.90,
-  },
-];
-
-function parseServiceAreas() {
-  const raw = process.env.TODAGO_SERVICE_AREAS_JSON;
-  if (!raw) return DEFAULT_SERVICE_AREAS;
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      return DEFAULT_SERVICE_AREAS;
-    }
-    const valid = parsed
-      .map((area) => ({
-        name: String(area.name || 'Service Area'),
-        minLat: Number.parseFloat(area.minLat),
-        maxLat: Number.parseFloat(area.maxLat),
-        minLng: Number.parseFloat(area.minLng),
-        maxLng: Number.parseFloat(area.maxLng),
-      }))
-      .filter((area) =>
-        Number.isFinite(area.minLat) &&
-        Number.isFinite(area.maxLat) &&
-        Number.isFinite(area.minLng) &&
-        Number.isFinite(area.maxLng) &&
-        area.minLat >= -90 && area.maxLat <= 90 && area.minLat <= area.maxLat &&
-        area.minLng >= -180 && area.maxLng <= 180 && area.minLng <= area.maxLng
-      );
-    return valid.length ? valid : DEFAULT_SERVICE_AREAS;
-  } catch {
-    return DEFAULT_SERVICE_AREAS;
-  }
-}
-
-function isWithinArea(lat, lng, area) {
-  return lat >= area.minLat &&
-    lat <= area.maxLat &&
-    lng >= area.minLng &&
-    lng <= area.maxLng;
-}
-
-function serviceAreaFor(lat, lng) {
-  const areas = parseServiceAreas();
-  return areas.find((area) => isWithinArea(lat, lng, area)) || null;
-}
-
 async function createIssueReport({
   reporterRole = 'system',
   reporterId = null,
@@ -109,7 +49,7 @@ async function createIssueReport({
 async function recordLocationAlert(driverId, lat, lng, context, config, database) {
   const metadata = {
     lat, lng, source: context.source || 'driver_location',
-    observed_at: new Date().toISOString(), ...config.metadata,
+    observed_at: context.observedAt, location_id: context.locationId, ...config.metadata,
   };
   const recent = await database.dbGet(
     `SELECT issue_id, subject_name
@@ -170,15 +110,12 @@ async function recordLocationAlert(driverId, lat, lng, context, config, database
   return { outside: true, saved: true, issueId: report.issue_id };
 }
 
-async function recordDriverServiceAreaAlert(driverId, lat, lng, context = {}, database = defaultDatabase) {
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { outside: false, saved: false };
-  const area = serviceAreaFor(lat, lng);
-  if (area) return { outside: false, saved: false, matchedArea: area.name };
+async function recordDriverServiceAreaAlert(driverId, lat, lng, context, area, database) {
   return recordLocationAlert(driverId, lat, lng, context, {
     reportType: 'driver_outside_service_area',
-    title: 'Driver outside configured service area',
-    details: 'reported GPS coordinates outside the configured service areas.',
-    metadata: { allowed_areas: parseServiceAreas() },
+    title: 'Driver outside service area',
+    details: 'reported a GPS location outside the TodaGo service area.',
+    metadata: { allowed_service_areas: area.allowed_service_areas },
   }, database);
 }
 
@@ -195,5 +132,4 @@ module.exports = {
   createIssueReport,
   recordDriverServiceAreaAlert,
   recordDriverRouteAlert,
-  serviceAreaFor,
 };

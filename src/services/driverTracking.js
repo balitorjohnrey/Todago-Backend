@@ -1,5 +1,6 @@
 const { pool } = require('../db/database');
-const { recordDriverServiceAreaAlert, recordDriverRouteAlert, serviceAreaFor } = require('../utils/adminReports');
+const { recordDriverServiceAreaAlert, recordDriverRouteAlert } = require('../utils/adminReports');
+const { classifyServiceArea } = require('../utils/serviceAreas');
 const { validPoint, routeForTrip, normalizeRoutePoints, distanceToRouteMeters, routeToleranceMeters } = require('../utils/routeMonitoring');
 
 async function recordDriverGpsLocation(driverId, lat, lng, { tripId = null, source = 'online_driver_location' } = {}) {
@@ -25,23 +26,28 @@ async function recordDriverGpsLocation(driverId, lat, lng, { tripId = null, sour
     const routeDistance = points ? distanceToRouteMeters({ lat, lng }, points) : null;
     const tolerance = routeToleranceMeters();
     const deviation = routeDistance == null ? null : routeDistance > tolerance;
-    const withinArea = !!serviceAreaFor(lat, lng);
+    const area = classifyServiceArea(lat, lng);
 
-    await client.query(`INSERT INTO gps_locations
+    const location = await database.dbGet(`INSERT INTO gps_locations
       (tricycle_id, driver_id, trip_id, latitude, longitude, source,
        within_service_area, route_leg, route_distance_m, route_deviation, timestamp)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp())
+      RETURNING location_id,
+        TO_CHAR(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS observed_at`,
     [tricycle?.tricycle_id || null, driverId, trip?.trip_id || null, lat, lng,
-      source, withinArea, leg?.key || null, routeDistance, deviation]);
+      source, area.within_service_area, leg?.key || null, routeDistance, deviation]);
 
-    const context = { source, tripId: trip?.trip_id || null };
-    await recordDriverServiceAreaAlert(driverId, lat, lng, context, database);
+    const context = { source, tripId: trip?.trip_id || null, locationId: location.location_id,
+      observedAt: location.observed_at };
+    if (!area.within_service_area) {
+      await recordDriverServiceAreaAlert(driverId, lat, lng, context, area, database);
+    }
     if (deviation) {
       await recordDriverRouteAlert(driverId, lat, lng, { ...context,
         routeLeg: leg.key, distanceMeters: routeDistance, toleranceMeters: tolerance }, database);
     }
     await client.query('COMMIT');
-    return true;
+    return { ...area, observed_at: location.observed_at };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     throw error;

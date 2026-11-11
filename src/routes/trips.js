@@ -1248,14 +1248,14 @@ router.put('/:tripId/driver-location', requireAuth, [
       [parseFloat(req.body.lat), parseFloat(req.body.lng), trip.trip_id]
     );
 
-    await recordDriverGpsLocation(
+    const serviceArea = await recordDriverGpsLocation(
       req.userId,
       parseFloat(req.body.lat),
       parseFloat(req.body.lng),
       { source: 'active_trip', tripId: trip.trip_id }
     );
 
-    return res.json({ success: true, message: 'Driver location updated' });
+    return res.json({ success: true, message: 'Driver location updated', service_area: serviceArea });
   } catch (err) {
     console.error('[Trips] Driver location update error:', err.message);
     return res.status(500).json({ success: false, message: 'Server error' });

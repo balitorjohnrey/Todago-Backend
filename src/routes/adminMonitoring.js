@@ -1,4 +1,5 @@
 const { getDriverPerformance } = require('../services/driverPerformance');
+const { classifyServiceArea } = require('../utils/serviceAreas');
 
 function integer(value, fallback, max) {
   const parsed = Number(value);
@@ -61,17 +62,22 @@ function registerAdminMonitoring(router, requireAdminAuth, { dbAll, dbGet }) {
     }
     try {
       const rows = await dbAll(`SELECT g.*, COALESCE(g.driver_id, t.driver_id) AS linked_driver_id,
-        d.driver_name, d.toda_body_number, t.plate_no,
+        d.driver_name, d.toda_body_number, t.plate_no, ta.association_name,
+        (g.driver_id IS NOT NULL AND d.is_active IS NOT FALSE) AS can_message_driver,
         TO_CHAR(g.timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS observed_at
         FROM gps_locations g LEFT JOIN tricycles t ON t.tricycle_id = g.tricycle_id
         LEFT JOIN drivers d ON d.driver_id = COALESCE(g.driver_id, t.driver_id)
+        LEFT JOIN toda_associations ta ON ta.toda_id = d.toda_id
         WHERE ($1::text IS NULL OR COALESCE(g.driver_id, t.driver_id) = $1)
           AND ($2::text IS NULL OR g.trip_id = $2)
           AND g.timestamp >= NOW() - ($3::integer * INTERVAL '1 day')
           AND ($4::timestamptz IS NULL OR (g.timestamp, g.location_id) < ($4::timestamptz, $5::text))
         ORDER BY g.timestamp DESC, g.location_id DESC LIMIT $6`,
       [driverId, tripId, days, before, beforeId, limit + 1]);
-      const locations = rows.slice(0, limit);
+      // Evaluate historical coordinates too; older samples used broad rectangles.
+      const locations = rows.slice(0, limit).map(row => ({
+        ...row, ...classifyServiceArea(row.latitude, row.longitude),
+      }));
       const last = locations[locations.length - 1];
       return res.json({ success: true, locations, has_more: rows.length > limit,
         next_cursor: rows.length > limit && last
@@ -79,6 +85,36 @@ function registerAdminMonitoring(router, requireAdminAuth, { dbAll, dbGet }) {
     } catch (error) {
       console.error('[Admin] GPS activity error:', error.message);
       return res.status(500).json({ success: false, message: 'Unable to load GPS activity' });
+    }
+  });
+
+  router.post('/monitoring/gps/:locationId/messages', requireAdminAuth, async (req, res) => {
+    const { locationId } = req.params;
+    const { requestId, message } = req.body || {};
+    const body = typeof message === 'string' ? message.trim() : '';
+    if (locationId.length > 120 || typeof requestId !== 'string' || !/^[a-f0-9]{32}$/.test(requestId)
+        || !body || [...body].length > 500) {
+      return res.status(422).json({ success: false, message: 'Enter a message of 1 to 500 characters.' });
+    }
+    try {
+      // Use the recorded driver, never a driver ID from the client or a
+      // vehicle's current driver for a legacy GPS sample.
+      const sent = await dbGet(`INSERT INTO driver_messages
+        (message_id, driver_id, sender_admin_id, gps_location_id, body)
+        SELECT $2, d.driver_id, $3, g.location_id, $4
+        FROM gps_locations g JOIN drivers d ON d.driver_id = g.driver_id
+        WHERE g.location_id = $1 AND d.is_active IS NOT FALSE
+        ON CONFLICT (message_id) DO NOTHING RETURNING message_id`,
+      [locationId, requestId, req.adminId, body]);
+      if (sent) return res.status(201).json({ success: true });
+      const prior = await dbGet(`SELECT (gps_location_id = $1 AND sender_admin_id = $3 AND body = $4) AS same
+        FROM driver_messages WHERE message_id = $2`, [locationId, requestId, req.adminId, body]);
+      if (prior?.same) return res.json({ success: true });
+      if (prior) return res.status(409).json({ success: false, message: 'Start a new message and try again.' });
+      return res.status(404).json({ success: false, message: 'No active driver is linked to this GPS update.' });
+    } catch (error) {
+      console.error('[Admin] Driver message error:', error.message);
+      return res.status(500).json({ success: false, message: 'Unable to send the message. Please retry.' });
     }
   });
 }

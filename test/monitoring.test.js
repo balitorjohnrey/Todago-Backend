@@ -12,6 +12,7 @@ const { distanceToRouteMeters, currentRouteLeg } = require('../src/utils/routeMo
 const qrManifest = require('../src/data/passengerQrPool.json');
 
 const road = [{ lat: 7.30, lng: 125.65 }, { lat: 7.30, lng: 125.70 }];
+const tagum = { lat: 7.456748392598449, lng: 125.79541245835289 };
 
 async function fixture() {
   const pg = await PGlite.create('memory://', { extensions: { pgcrypto } });
@@ -67,7 +68,8 @@ async function fixture() {
   try { await initializer.initializeDatabase(); }
   catch (error) { await pg.close(); throw error; }
   const routers = { trips: load('routes/trips.js'), admin: load('routes/admin_auth.js'),
-    operator: load('routes/operator_auth.js'), reports: load('routes/reports.js') };
+    operator: load('routes/operator_auth.js'), reports: load('routes/reports.js'),
+    driver: load('routes/driver_auth.js') };
 
   async function request(router, routePath, { method = 'get', role = 'admin', id = `${role}-1`,
     body = {}, query: queryParams = {}, params = {} } = {}) {
@@ -315,6 +317,7 @@ test('trip monitoring uses real isolated PostgreSQL migrations and transactions'
     const updated = await f.request('trips', '/:tripId/driver-location', { method: 'put', role: 'driver',
       params: { tripId }, body: { lat: 7.30, lng: 125.67 } });
     assert.equal(updated.code, 200, updated.data?.message);
+    assert.equal(updated.data.service_area.service_area_name, 'Panabo City');
     assert.equal((await f.database.dbGet('SELECT COUNT(*) FROM gps_locations WHERE trip_id=$1', [tripId])).count, 5);
     // A location request may finish after a simultaneous completion. Keep its
     // known trip attribution while stopping route checks for that finished leg.
@@ -323,6 +326,72 @@ test('trip monitoring uses real isolated PostgreSQL migrations and transactions'
     const last = await f.database.dbGet('SELECT * FROM gps_locations ORDER BY timestamp DESC LIMIT 1');
     assert.equal(last.trip_id, tripId);
     assert.equal(last.route_distance_m, null);
+  });
+
+  await t.test('going online in Tagum warns both roles and older Tagum records are corrected', async () => {
+    await f.database.dbRun("UPDATE drivers SET status='offline' WHERE driver_id='driver-1'");
+    await f.database.dbRun(`INSERT INTO gps_locations
+      (location_id, driver_id, latitude, longitude, within_service_area)
+      VALUES ('old-tagum', 'driver-1', $1, $2, true)`, [tagum.lat, tagum.lng]);
+    const start = await f.request('driver', '/status', {
+      method: 'put', role: 'driver', body: { status: 'online', ...tagum },
+    });
+    assert.equal(start.code, 200, start.data?.message);
+    assert.equal(start.data.service_area.within_service_area, false);
+    assert.deepEqual([...start.data.service_area.allowed_service_areas], ['Panabo City', 'Carmen']);
+    const gps = (await f.request('admin', '/monitoring/gps')).data.locations;
+    assert.equal(gps.length, 2);
+    assert.ok(gps.every(row => row.within_service_area === false));
+    const report = await f.database.dbGet('SELECT * FROM issue_reports');
+    assert.equal(report.report_type, 'driver_outside_service_area');
+    assert.equal(report.priority, 'high');
+    assert.equal(report.metadata.location_id, gps[0].location_id);
+    for (const [name, point] of [
+      ['Panabo City', { lat: 7.3209196, lng: 125.670569 }],
+      ['Carmen', { lat: 7.36, lng: 125.705 }],
+    ]) {
+      const moved = await f.request('driver', '/location', { method: 'put', role: 'driver', body: point });
+      assert.equal(moved.data.service_area.within_service_area, true);
+      assert.equal(moved.data.service_area.service_area_name, name);
+    }
+    const outsideAgain = await f.request('driver', '/location', { method: 'put', role: 'driver', body: tagum });
+    assert.equal(outsideAgain.data.service_area.within_service_area, false);
+    assert.equal((await f.database.dbGet('SELECT COUNT(*) FROM issue_reports')).count, 1);
+  });
+
+  await t.test('GPS messages follow the recorded driver and retries do not send twice', async () => {
+    await f.load('services/driverTracking.js').recordDriverGpsLocation('driver-1', tagum.lat, tagum.lng);
+    const location = (await f.request('admin', '/monitoring/gps')).data.locations[0];
+    assert.equal(location.can_message_driver, true);
+    await f.database.dbRun("UPDATE tricycles SET driver_id = 'driver-2' WHERE tricycle_id = 'tricycle-1'");
+    await f.database.dbRun(`INSERT INTO gps_locations (location_id, tricycle_id, latitude, longitude)
+      VALUES ('legacy-vehicle-only', 'tricycle-1', $1, $2)`, [tagum.lat, tagum.lng]);
+    const messageId = 'a'.repeat(32);
+    const message = 'Please return to Panabo City or Carmen.';
+    const send = (overrides = {}) => f.request('admin', '/monitoring/gps/:locationId/messages', {
+      method: 'post', params: { locationId: location.location_id },
+      body: { message, requestId: messageId, driverId: 'driver-2' }, ...overrides,
+    });
+    assert.equal((await send({ role: 'driver' })).code, 403);
+    assert.equal((await send({ body: { message: ' ', requestId: messageId } })).code, 422);
+    assert.equal((await send({ params: { locationId: 'legacy-vehicle-only' } })).code, 404);
+    assert.equal((await send()).code, 201);
+    assert.equal((await send()).code, 200);
+
+    const inbox = id => f.request('driver', '/messages', { role: 'driver', id });
+    const mine = (await inbox('driver-1')).data.messages;
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0].body, message);
+    assert.equal(mine[0].read_at, null);
+    assert.equal((await inbox('driver-2')).data.messages.length, 0);
+    assert.equal((await f.request('driver', '/messages', { role: 'passenger' })).code, 403);
+
+    const read = id => f.request('driver', '/messages/:messageId/read', {
+      method: 'patch', role: 'driver', id, params: { messageId },
+    });
+    assert.equal((await read('driver-2')).code, 404);
+    assert.equal((await read('driver-1')).code, 200);
+    assert.ok((await inbox('driver-1')).data.messages[0].read_at);
   });
 
   await t.test('a failed alert rolls back its GPS sample; retry records both', async () => {

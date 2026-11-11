@@ -284,6 +284,7 @@ test('static QR routes select the authenticated passenger and verify webhooks be
       staticQrPresentation: row => ({ kind: 'static_qr', qrCodeId: row.qr_code_id }),
     },
     '../utils/adminReports': {}, '../services/reportPenalties': {}, '../services/tripPayments': {},
+    '../services/driverTracking': {},
   };
   const wallet = loadWith('src/routes/wallet.js', stubs);
   const trips = loadWith('src/routes/trips.js', stubs);

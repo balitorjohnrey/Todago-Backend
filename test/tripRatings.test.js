@@ -74,7 +74,7 @@ function fixture(t) {
   const stubs = { '../db/database': database, '../utils/adminReports': {},
     '../services/reportPenalties': {}, '../services/paymongo': {}, '../services/walletLedger': {},
     '../services/walletPayments': {}, '../services/walletIntentPayments': {},
-    '../services/walletStaticQr': {}, '../services/tripPayments': {} };
+    '../services/walletStaticQr': {}, '../services/tripPayments': {}, '../services/driverTracking': {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports,
     require: name => Object.hasOwn(stubs, name) ? stubs[name] : actualRequire(name),
     process, console, Buffer, Date }, { filename });

@@ -51,7 +51,9 @@ async function actorName(role, id) {
 }
 
 router.post('/', requireAnyAuth, [
-  body('reportType').trim().notEmpty().withMessage('Report type is required'),
+  body('reportType').trim().notEmpty().withMessage('Report type is required')
+    .custom(value => !['driver_route_deviation', 'driver_outside_service_area'].includes(value))
+    .withMessage('GPS alerts are generated automatically by the system.'),
   body('title').trim().isLength({ min: 3, max: 120 }).withMessage('Title must be 3 to 120 characters'),
   body('details').optional({ nullable: true }).trim().isLength({ max: 1200 }).withMessage('Details must be 1200 characters or less'),
   body('subjectRole').optional({ nullable: true }).isIn(['passenger','commuter','driver','operator','vehicle','trip','system']).withMessage('Invalid subject role'),

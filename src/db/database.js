@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { Pool } = require('pg');
+const { syncDriverPerformance } = require('../services/driverPerformance');
 
 if (!process.env.DATABASE_URL) {
   console.error('[DB] ERROR: DATABASE_URL is not set.');
@@ -465,7 +466,7 @@ async function initializeDatabase() {
                             CHECK (service_type IN ('solo','shared','express','pickup')),
         passenger_count   INT DEFAULT 1,
         passenger_fare_type TEXT DEFAULT 'regular'
-                            CHECK (passenger_fare_type IN ('regular','student','senior','pwd')),
+                            CHECK (passenger_fare_type IN ('regular','student','senior','pwd','pregnant')),
         pickup_location   TEXT,
         pickup_lat        FLOAT,
         pickup_lng        FLOAT,
@@ -607,11 +608,10 @@ async function initializeDatabase() {
       `UPDATE trips SET passenger_fare_type = 'regular' WHERE passenger_fare_type IS NULL`
     );
     await client.query(
-      `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_passenger_fare_type_check`
-    );
-    await client.query(
-      `ALTER TABLE trips ADD CONSTRAINT trips_passenger_fare_type_check
-       CHECK (passenger_fare_type IN ('regular','student','senior','pwd'))`
+      `ALTER TABLE trips
+       DROP CONSTRAINT IF EXISTS trips_passenger_fare_type_check,
+       ADD CONSTRAINT trips_passenger_fare_type_check
+       CHECK (passenger_fare_type IN ('regular','student','senior','pwd','pregnant'))`
     );
     await client.query(
       `ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_service_type_check`
@@ -835,6 +835,27 @@ async function initializeDatabase() {
       ON driver_cashouts(provider, payment_reference) WHERE payment_reference IS NOT NULL`);
 
     // ── GPS LOCATIONS ─────────────────────────────────────────────────────────
+    await client.query(`ALTER TABLE trips ADD COLUMN IF NOT EXISTS
+      designated_routes JSONB NOT NULL DEFAULT '{}'::jsonb`);
+    await client.query(`CREATE TABLE IF NOT EXISTS trip_additional_charges (
+      charge_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      trip_id TEXT NOT NULL UNIQUE REFERENCES trips(trip_id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
+      added_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      intent_confirmed BOOLEAN,
+      source TEXT NOT NULL,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    // Preserve the original label and timestamp. Older records have no separate
+    // confirmation audit, so do not invent one during the migration.
+    await client.query(`INSERT INTO trip_additional_charges
+      (trip_id, label, amount, added_by, intent_confirmed, source, added_at)
+      SELECT trip_id, COALESCE(NULLIF(TRIM(other_fee_label), ''), 'Others'),
+             other_fee_amount, commuter_id, NULL, 'legacy_booking',
+             COALESCE(request_timestamp, created_at, NOW())
+      FROM trips WHERE other_fee_amount > 0
+      ON CONFLICT (trip_id) DO NOTHING`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS gps_locations (
         location_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -851,6 +872,18 @@ async function initializeDatabase() {
       `CREATE INDEX IF NOT EXISTS idx_gps_locations_tricycle_timestamp
        ON gps_locations(tricycle_id, timestamp DESC)`
     );
+    await client.query(`ALTER TABLE gps_locations
+      ADD COLUMN IF NOT EXISTS driver_id TEXT REFERENCES drivers(driver_id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS trip_id TEXT REFERENCES trips(trip_id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'legacy',
+      ADD COLUMN IF NOT EXISTS within_service_area BOOLEAN,
+      ADD COLUMN IF NOT EXISTS route_leg TEXT,
+      ADD COLUMN IF NOT EXISTS route_distance_m FLOAT,
+      ADD COLUMN IF NOT EXISTS route_deviation BOOLEAN`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_gps_locations_driver_timestamp
+      ON gps_locations(driver_id, timestamp DESC, location_id DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_gps_locations_trip_timestamp
+      ON gps_locations(trip_id, timestamp DESC, location_id DESC)`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS performance_reports (
@@ -863,6 +896,12 @@ async function initializeDatabase() {
         created_at    TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await client.query(`ALTER TABLE performance_reports
+      ADD COLUMN IF NOT EXISTS report_scope TEXT NOT NULL DEFAULT 'daily',
+      ADD COLUMN IF NOT EXISTS rating_count INT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_performance_current_driver
+      ON performance_reports(driver_id) WHERE report_scope = 'lifetime'`);
 
     // ── FEEDBACK ──────────────────────────────────────────────────────────────
     await client.query(`
@@ -1115,6 +1154,9 @@ async function initializeDatabase() {
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_trips_commuter ON trips(commuter_id)`
     );
+
+    await client.query('CREATE INDEX IF NOT EXISTS idx_feedback_driver ON feedback(driver_id)');
+    await syncDriverPerformance(client);
 
     if (process.env.WALLET_RESET_REQUEST_ID?.trim()) {
       const { runWalletReset } = require('../services/walletReset');

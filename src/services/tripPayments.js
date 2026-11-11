@@ -1,5 +1,6 @@
 const { pool } = require('../db/database');
 const { syncEarnings } = require('./driverWallet');
+const { syncDriverPerformance } = require('./driverPerformance');
 
 function fail(message, statusCode = 409) {
   const error = new Error(message);
@@ -55,6 +56,7 @@ async function completePaidTrip(tripId, driverId) {
         WHERE driver_id = $1`, [driverId]);
     }
     await syncEarnings(client, driverId);
+    await syncDriverPerformance(client, driverId);
     await client.query('COMMIT');
     const fare = Number(trip.fare);
     return { gross_fare: fare, your_earnings: fare };

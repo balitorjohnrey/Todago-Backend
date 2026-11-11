@@ -72,7 +72,7 @@ async function fixture(t) {
         state.reports.set(id, { issue_id: id, reporter_role: role, reporter_id: reporterId, reporter_name: name,
           report_type: type, subject_role: subjectRole, subject_id: subjectId, subject_name: subjectName,
           trip_id: tripId, title, details, status: 'pending' });
-      } else if (sql.startsWith('INSERT INTO trips')) {
+      } else if (sql.startsWith('WITH booked_trip AS (INSERT INTO trips')) {
         state.trips.set(args[0], { trip_id: args[0], commuter_id: args[1], driver_id: args[3], status: args[23] });
       } else if (sql.startsWith('UPDATE trips')) {
         const id = sql.includes("status = 'accepted'") ? args[0] : args[1];
@@ -86,6 +86,7 @@ async function fixture(t) {
   const reports = loadWith('src/utils/adminReports.js', { '../db/database': database });
   const stubs = { '../db/database': database, '../services/reportPenalties': penalties,
     '../services/walletStaticQr': {},
+    '../services/driverTracking': {},
     '../utils/adminReports': reports, '../utils/routeAnalytics': {}, '../utils/peakHourAnalytics': {},
     '../services/driverWallet': {}, '../services/paymongo': {}, '../services/walletLedger': {},
     '../services/walletPayments': {}, '../services/walletIntentPayments': {},

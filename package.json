@@ -25,6 +25,7 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.16",
     "nodemon": "^3.0.2"
   }
 }

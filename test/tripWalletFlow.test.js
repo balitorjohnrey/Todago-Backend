@@ -140,6 +140,7 @@ function fixture(initialBalance = 100) {
         const row = { ...rows('cashouts').get(args[0]), status: args[1], payment_reference: args[2], review_note: args[3] };
         staged.cashouts.set(args[0], row); return result([row]);
       }
+      if (sql.startsWith('INSERT INTO performance_reports')) return result([]);
       throw new Error(`Unhandled test query: ${sql}`);
     } };
   }
@@ -159,6 +160,7 @@ function fixture(initialBalance = 100) {
   }
   const router = loadWith('src/routes/trips.js', {
     '../services/walletStaticQr': {},
+    '../services/driverTracking': {},
     '../db/database': database, '../utils/adminReports': {}, '../services/paymongo': {},
     '../services/reportPenalties': loadWith('src/services/reportPenalties.js', { '../db/database': database }),
     '../services/walletLedger': ledger, '../services/walletPayments': {},

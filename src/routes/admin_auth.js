@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { reviewIssueReport } = require('../services/reportPenalties');
+const { registerAdminMonitoring } = require('./adminMonitoring');
 const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
 const {
   clampInt: clampPeakInt,
@@ -12,6 +13,7 @@ const {
 } = require('../utils/peakHourAnalytics');
 
 const router = express.Router();
+registerAdminMonitoring(router, requireAdminAuth, { dbAll, dbGet });
 const { reviewCashOut } = require('../services/driverWallet');
 const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
 
@@ -161,10 +163,13 @@ router.get('/stats', requireAdminAuth, async (req, res) => {
            WHERE status = 'pending'`
         ).catch(() => ({ count: 0 })),
         dbGet(
-          `SELECT COUNT(*) FROM issue_reports
+          `SELECT COUNT(*) AS count,
+                  COUNT(*) FILTER (WHERE report_type = 'driver_outside_service_area') AS area_count
+           FROM issue_reports
            WHERE status = 'pending'
-             AND report_type = 'driver_outside_service_area'`
-        ).catch(() => ({ count: 0 })),
+             AND report_type IN ('driver_outside_service_area', 'driver_route_deviation')
+             AND reporter_role = 'system'`
+        ).catch(() => ({ count: 0, area_count: 0 })),
       ]);
 
     return res.json({
@@ -175,7 +180,8 @@ router.get('/stats', requireAdminAuth, async (req, res) => {
         pending_associated_drivers: parseInt(pendingAssociated.count, 10),
         operators: parseInt(operators.count, 10),
         pending_reports: parseInt(pendingReports.count, 10),
-        service_area_alerts: parseInt(serviceAlerts.count, 10),
+        service_area_alerts: parseInt(serviceAlerts.area_count, 10),
+        gps_alerts: parseInt(serviceAlerts.count, 10),
       },
     });
   } catch (error) {

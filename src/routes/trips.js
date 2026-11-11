@@ -6,7 +6,9 @@ const { body, validationResult } = require('express-validator');
 const jwt     = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { pool, dbRun, dbGet, dbAll } = require('../db/database');
-const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
+const { recordDriverGpsLocation } = require('../services/driverTracking');
+const { syncDriverPerformance } = require('../services/driverPerformance');
+const { validPoint, normalizeRoutePoints, distanceMeters, currentRouteLeg } = require('../utils/routeMonitoring');
 const { getRideRestriction, restrictionResponse } = require('../services/reportPenalties');
 const {
   createCheckoutSession,
@@ -26,6 +28,7 @@ const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
 const TRICYCLE_AVERAGE_SPEED_KMH = 19.94;
 const DRIVER_LOCATION_FRESHNESS_MINUTES = 5;
 const ONLINE_PAYMENT_METHODS = ['gcash', 'maya', 'wallet'];
+const PASSENGER_FARE_TYPES = ['regular', 'pwd', 'student', 'senior', 'pregnant'];
 
 function isExternalKycProvider(provider) {
   return EXTERNAL_KYC_PROVIDERS.has(String(provider || '').trim().toLowerCase());
@@ -298,7 +301,7 @@ router.post('/request', requireAuth, [
     .withMessage('Passenger count must be between 1 and 6'),
   body('passengerFareType')
     .optional({ nullable: true })
-    .isIn(['regular','student','senior','pwd'])
+    .isIn(PASSENGER_FARE_TYPES)
     .withMessage('Invalid passenger fare type'),
   body('otherFeeAmount')
     .optional({ nullable: true })
@@ -388,10 +391,9 @@ router.post('/request', requireAuth, [
   else if (serviceType.includes('shared')) serviceType = 'shared';
   else serviceType = 'solo';
 
-  const passengerFareType = ['student', 'senior', 'pwd'].includes(
-    (req.body.passengerFareType || '').toString().toLowerCase()
-  )
-    ? req.body.passengerFareType.toString().toLowerCase()
+  const requestedFareType = String(req.body.passengerFareType ?? 'regular').toLowerCase();
+  const passengerFareType = PASSENGER_FARE_TYPES.includes(requestedFareType)
+    ? requestedFareType
     : 'regular';
   const requestedPassengerCount = Number.parseInt(req.body.passengerCount, 10);
   const passengerCount = serviceType === 'shared'
@@ -402,6 +404,23 @@ router.post('/request', requireAuth, [
     Number.parseFloat(req.body.otherFeeAmount ?? 0) || 0
   );
   const otherFeeLabel = normalizeOptionalText(req.body.otherFeeLabel, 120);
+  if (otherFeeAmount > 0 && (!otherFeeLabel || otherFeeAmount < 0.01 || otherFeeAmount > Number(fare)
+      || Math.abs(otherFeeAmount * 100 - Math.round(otherFeeAmount * 100)) > 0.000001)) {
+    return res.status(422).json({ success: false,
+      message: 'Additional charges need a label, at most two decimal places, and must be included in the total fare.' });
+  }
+  const designatedRoutes = {};
+  if (req.body.routePoints != null) {
+    const points = normalizeRoutePoints(req.body.routePoints);
+    const from = { lat: parseCoord(pickupLat), lng: parseCoord(pickupLng) };
+    const to = { lat: parseCoord(destinationLat), lng: parseCoord(destinationLng) };
+    if (!points || !validPoint(from) || !validPoint(to)
+        || distanceMeters(from, points[0]) > 350
+        || distanceMeters(to, points[points.length - 1]) > 350) {
+      return res.status(422).json({ success: false, message: 'The designated route must connect the pickup and destination.' });
+    }
+    designatedRoutes['dropoff:0'] = { points, source: 'passenger_booking', saved_at: new Date().toISOString() };
+  }
   const bookingNotes = normalizeOptionalText(req.body.bookingNotes, 800);
   const pickupItemDescription =
     normalizeOptionalText(req.body.pickupItemDescription, 400);
@@ -513,7 +532,7 @@ router.post('/request', requireAuth, [
 
     const tripId = uuidv4();
     await dbRun(
-      `INSERT INTO trips
+      `WITH booked_trip AS (INSERT INTO trips
         (trip_id, commuter_id, tricycle_id, driver_id,
          route_segment,
          service_type, passenger_count, passenger_fare_type,
@@ -523,8 +542,14 @@ router.post('/request', requireAuth, [
          pickup_item_description, pickup_item_weight,
          shared_dropoffs, remaining_passenger_count,
          payment_method, status, trip_type, scheduled_pickup_at,
-         request_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22,$23,$24,$25,$26,NOW())`,
+         designated_routes, request_timestamp)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22,$23,$24,$25,$26,$27::jsonb,NOW())
+       RETURNING trip_id, commuter_id, other_fee_label, other_fee_amount, request_timestamp)
+       INSERT INTO trip_additional_charges
+         (trip_id, label, amount, added_by, intent_confirmed, source, added_at)
+       SELECT trip_id, other_fee_label, other_fee_amount, commuter_id,
+              true, 'passenger_booking', request_timestamp
+       FROM booked_trip WHERE other_fee_amount > 0`,
       [tripId, req.userId, driver.tricycle_id, driverId,
        routeSegment,
        serviceType, passengerCount, passengerFareType,
@@ -537,7 +562,7 @@ router.post('/request', requireAuth, [
        paymentMethod,
        isScheduled ? 'scheduled' : 'requested',
        isScheduled ? 'scheduled' : 'instant',
-       scheduledDate]
+       scheduledDate, JSON.stringify(designatedRoutes)]
     );
 
     if (!isScheduled) {
@@ -1142,6 +1167,42 @@ router.post('/:tripId/dropoff', requireAuth, async (req, res) => {
   }
 });
 
+router.put('/:tripId/designated-route', requireAuth, async (req, res) => {
+  if (req.userRole !== 'driver') {
+    return res.status(403).json({ success: false, message: 'Driver access only' });
+  }
+  const points = normalizeRoutePoints(req.body.points);
+  if (!points) return res.status(422).json({ success: false, message: 'A valid road route is required.' });
+  try {
+    const trip = await dbGet('SELECT * FROM trips WHERE trip_id = $1 AND driver_id = $2',
+      [req.params.tripId, req.userId]);
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
+    const leg = currentRouteLeg(trip);
+    if (!leg || !leg.target || req.body.leg !== leg.key) {
+      return res.status(409).json({ success: false, message: 'The route does not match the current trip leg.' });
+    }
+    if (trip.designated_routes?.[leg.key]) {
+      return res.json({ success: true, saved: false, leg: leg.key });
+    }
+    const origin = { lat: parseCoord(trip.driver_lat), lng: parseCoord(trip.driver_lng) };
+    if (!validPoint(origin) || distanceMeters(origin, points[0]) > 1000
+        || distanceMeters(leg.target, points[points.length - 1]) > 350) {
+      return res.status(422).json({ success: false, message: 'The route must connect the driver location and current stop.' });
+    }
+    const route = { points, source: 'driver_navigation', saved_at: new Date().toISOString() };
+    const saved = await dbRun(`UPDATE trips
+      SET designated_routes = designated_routes || jsonb_build_object($2::text, $3::jsonb)
+      WHERE trip_id = $1 AND driver_id = $4 AND status = $5
+        AND NOT (designated_routes ? $2::text)
+        AND shared_dropoffs IS NOT DISTINCT FROM $6::jsonb`,
+    [trip.trip_id, leg.key, JSON.stringify(route), req.userId, trip.status, JSON.stringify(trip.shared_dropoffs)]);
+    return res.json({ success: true, saved: saved.rowCount > 0, leg: leg.key });
+  } catch (error) {
+    console.error('[Trips] Designated route error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to save designated route' });
+  }
+});
+
 router.put('/:tripId/driver-location', requireAuth, [
   body('lat')
     .isFloat({ min: -90, max: 90 })
@@ -1187,14 +1248,12 @@ router.put('/:tripId/driver-location', requireAuth, [
       [parseFloat(req.body.lat), parseFloat(req.body.lng), trip.trip_id]
     );
 
-    recordDriverServiceAreaAlert(
+    await recordDriverGpsLocation(
       req.userId,
       parseFloat(req.body.lat),
       parseFloat(req.body.lng),
       { source: 'active_trip', tripId: trip.trip_id }
-    ).catch((error) => {
-      console.error('[Trips] Service area alert error:', error.message);
-    });
+    );
 
     return res.json({ success: true, message: 'Driver location updated' });
   } catch (err) {
@@ -1482,22 +1541,7 @@ router.post('/:tripId/rate', requireAuth, [
         [trip.driver_id]
       );
 
-      await client.query(
-        `INSERT INTO performance_reports (report_id, driver_id, report_date, avg_rating, total_trips)
-       VALUES ($1, $2, CURRENT_DATE, 0, 0)
-       ON CONFLICT DO NOTHING`,
-        [uuidv4(), trip.driver_id]
-      );
-
-      await client.query(
-        `UPDATE performance_reports
-       SET avg_rating = (
-         SELECT ROUND(AVG(rating_score)::numeric, 2)
-         FROM feedback WHERE driver_id = $1
-       )
-       WHERE driver_id = $1 AND report_date = CURRENT_DATE`,
-        [trip.driver_id]
-      );
+      await syncDriverPerformance(client, trip.driver_id);
     }
     await client.query('COMMIT');
 

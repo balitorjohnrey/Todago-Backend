@@ -17,7 +17,7 @@ const {
   verifyPasswordDetailed,
   validatePasswordStrength,
 } = require('../utils/password');
-const { recordDriverServiceAreaAlert } = require('../utils/adminReports');
+const { recordDriverGpsLocation } = require('../services/driverTracking');
 const { getRideRestriction, restrictionResponse } = require('../services/reportPenalties');
 const {
   pickIdentityPayload,
@@ -211,31 +211,6 @@ function parseFiniteNumber(value) {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-async function recordDriverGpsLocation(driverId, lat, lng) {
-  const tricycle = await dbGet(
-    `SELECT tricycle_id
-     FROM tricycles
-     WHERE driver_id = $1
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [driverId]
-  );
-
-  if (!tricycle?.tricycle_id) return false;
-
-  await dbRun(
-    `INSERT INTO gps_locations (tricycle_id, latitude, longitude, speed_kmh, timestamp)
-     VALUES ($1, $2, $3, 0, NOW())`,
-    [tricycle.tricycle_id, lat, lng]
-  );
-  recordDriverServiceAreaAlert(driverId, lat, lng, {
-    source: 'online_driver_location',
-  }).catch((error) => {
-    console.error('[Driver] Service area alert error:', error.message);
-  });
-  return true;
 }
 
 // GET /api/driver/toda-associations

@@ -113,6 +113,86 @@ async function fixture() {
   return { pg, database, request, seed, book, load, initializer, env, close: () => pg.close() };
 }
 
+test('validated report penalties expire on schedule and permanent restrictions stay active', async t => {
+  const f = await fixture();
+  t.after(f.close);
+  await f.seed();
+
+  await f.pg.exec(`ALTER TABLE issue_reports
+    DROP CONSTRAINT issue_reports_penalty_minutes_check,
+    ADD CONSTRAINT issue_reports_penalty_minutes_check CHECK (penalty_minutes IN (30,60,1440,2880));
+    INSERT INTO issue_reports (issue_id, reporter_role, report_type, title, penalty_minutes, penalty_severity)
+    VALUES ('legacy', 'passenger', 'driver_behavior', 'Historical report', 2880, 'severe');`);
+  await f.initializer.initializeDatabase();
+  const legacy = await f.database.dbGet("SELECT penalty_minutes, penalty_severity FROM issue_reports WHERE issue_id = 'legacy'");
+  assert.deepEqual(legacy, { penalty_minutes: 2880, penalty_severity: 'severe' });
+
+  const addReport = (id, role) => f.database.dbRun(`INSERT INTO issue_reports
+    (issue_id, reporter_role, report_type, subject_role, subject_id, title)
+    VALUES ($1, $2, 'incident', $3, $4, 'Trip report')`,
+  [id, role === 'driver' ? 'passenger' : 'driver', role, `${role}-1`]);
+  const review = (id, body) => f.request('admin', '/reports/:issueId/status', {
+    method: 'patch', params: { issueId: id }, body: { status: 'validated', ...body },
+  });
+  const onlineDriverIds = async () => {
+    const online = await f.request('trips', '/drivers/online', { role: 'passenger' });
+    return Array.from(online.data.drivers, driver => driver.driver_id).sort();
+  };
+  for (const [duration, minutes] of [['1h', 60], ['3h', 180], ['5h', 300], ['12h', 720], ['24h', 1440], ['1w', 10080]]) {
+    await addReport(duration, 'driver');
+    const decision = await review(duration, { penaltyDuration: duration });
+    assert.equal(decision.code, 200);
+    assert.equal(decision.data.report.penalty_minutes, minutes);
+    assert.equal(decision.data.report.penalty_permanent, false);
+    assert.equal(Date.parse(decision.data.report.restriction_until) - Date.parse(decision.data.report.validated_at), minutes * 60000);
+  }
+  assert.deepEqual(await onlineDriverIds(), ['driver-2']);
+  await addReport('timed-passenger', 'passenger');
+  assert.equal((await review('timed-passenger', { penaltyDuration: '3h' })).code, 200);
+  assert.equal((await f.book({ driverId: 'driver-2' })).data.code, 'PASSENGER_BOOKING_COOLDOWN');
+
+  // Age the restrictions so their expiry is in the past without changing the admin decisions.
+  await f.database.dbRun(`UPDATE issue_reports
+    SET validated_at = validated_at - INTERVAL '8 days',
+        restriction_until = restriction_until - INTERVAL '8 days'
+    WHERE status = 'validated' AND restriction_until IS NOT NULL`);
+  assert.deepEqual(await onlineDriverIds(), ['driver-1', 'driver-2']);
+  const scheduledPickupAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  assert.equal((await f.book({ scheduledPickupAt })).code, 201);
+
+  await addReport('permanent-driver', 'driver');
+  assert.equal((await review('permanent-driver', { penaltyDuration: '2h' })).code, 422);
+  const permanent = await review('permanent-driver', { penaltyDuration: 'permanent' });
+  assert.equal(permanent.code, 200);
+  assert.match(permanent.data.message, /Driver ride suspension applied permanently/);
+  assert.equal(permanent.data.report.penalty_permanent, true);
+  assert.equal(permanent.data.report.penalty_minutes, null);
+  const repeat = await review('permanent-driver', { penaltyDuration: '1h' });
+  assert.equal(repeat.data.report.penalty_permanent, true);
+  assert.equal(repeat.data.report.penalty_minutes, null);
+  assert.equal((await review('permanent-driver', { status: 'resolved' })).code, 200);
+
+  assert.deepEqual(await onlineDriverIds(), ['driver-2']);
+  const profile = await f.request('driver', '/me', { role: 'driver' });
+  const restriction = profile.data.driver.ride_restriction;
+  assert.equal(restriction.permanent, true);
+  assert.equal(restriction.restrictedUntil, null);
+  assert.equal(restriction.retryAfterSeconds, null);
+  const driverBooking = await f.book();
+  assert.equal(driverBooking.code, 403);
+  assert.match(driverBooking.data.message, /driver is permanently suspended/);
+
+  await addReport('permanent-passenger', 'passenger');
+  const passengerDecision = await review('permanent-passenger', { penaltyDuration: 'permanent' });
+  assert.match(passengerDecision.data.message, /Booking restriction applied permanently/);
+  const passengerBooking = await f.book({ driverId: 'driver-2' });
+  assert.equal(passengerBooking.code, 403);
+  assert.equal(passengerBooking.data.permanent, true);
+  assert.match(passengerBooking.data.message, /permanently blocked you from booking/);
+  await review('permanent-passenger', { status: 'rejected' });
+  assert.equal((await f.book({ driverId: 'driver-2' })).code, 201);
+});
+
 test('startup rotates saved QRs atomically and preserves payment routing for retired codes', async t => {
   const f = await fixture();
   t.after(f.close);

@@ -1,5 +1,19 @@
 const { dbGet } = require('../db/database');
 
+const penaltyDurations = {
+  '1h': 60,
+  '3h': 180,
+  '5h': 300,
+  '12h': 720,
+  '24h': 1440,
+  '1w': 10080,
+  permanent: null,
+};
+
+function isPenaltyDuration(value) {
+  return typeof value === 'string' && Object.hasOwn(penaltyDurations, value);
+}
+
 function penaltyTarget(report) {
   if (report.reporter_role === 'driver' && ['passenger', 'commuter'].includes(report.subject_role)) {
     return 'passenger';
@@ -16,7 +30,7 @@ function penaltyMinutes(target, severity) {
   return null;
 }
 
-async function reviewIssueReport(issueId, { status, adminNotes, penaltySeverity = 'standard' }) {
+async function reviewIssueReport(issueId, { status, adminNotes, penaltyDuration, penaltySeverity = 'standard' }) {
   const report = await dbGet('SELECT * FROM issue_reports WHERE issue_id = $1', [issueId]);
   if (!report) {
     const error = new Error('Report not found');
@@ -29,7 +43,13 @@ async function reviewIssueReport(issueId, { status, adminNotes, penaltySeverity 
     error.statusCode = 422;
     throw error;
   }
-  const minutes = status === 'validated' ? penaltyMinutes(target, penaltySeverity) : null;
+  const appliesPenalty = status === 'validated' && target !== null;
+  const usesLegacySeverity = appliesPenalty && penaltyDuration === undefined;
+  let minutes = null;
+  if (appliesPenalty) {
+    minutes = usesLegacySeverity ? penaltyMinutes(target, penaltySeverity) : penaltyDurations[penaltyDuration];
+  }
+  const permanent = appliesPenalty && penaltyDuration === 'permanent';
 
   // One atomic update records the decision and penalty together. Retrying a
   // validation (even after expiry) never starts the same incident's timer again.
@@ -39,16 +59,19 @@ async function reviewIssueReport(issueId, { status, adminNotes, penaltySeverity 
          admin_notes = $2,
          validated_at = CASE WHEN $1 IN ('validated','rejected','resolved')
            THEN COALESCE(validated_at, NOW()) ELSE validated_at END,
-         penalty_severity = CASE WHEN $4::integer IS NOT NULL
-           THEN COALESCE(penalty_severity, $5) ELSE penalty_severity END,
-         penalty_minutes = COALESCE(penalty_minutes, $4::integer),
-         restriction_until = CASE WHEN $4::integer IS NOT NULL
-           THEN COALESCE(restriction_until, NOW() + $4::integer * INTERVAL '1 minute')
-           ELSE restriction_until END,
+         penalty_severity = CASE
+           WHEN restriction_until IS NULL AND ($4::integer IS NOT NULL OR $6::boolean) THEN $5
+           ELSE penalty_severity END,
+         penalty_minutes = CASE
+           WHEN restriction_until IS NULL AND ($4::integer IS NOT NULL OR $6::boolean) THEN $4::integer
+           ELSE penalty_minutes END,
+         restriction_until = COALESCE(restriction_until, CASE
+           WHEN $6::boolean THEN 'infinity'::timestamptz
+           ELSE NOW() + $4::integer * INTERVAL '1 minute' END),
          updated_at = NOW()
      WHERE issue_id = $3
-     RETURNING *`,
-    [status, adminNotes || null, issueId, minutes, minutes ? penaltySeverity : null]
+     RETURNING *, COALESCE(restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent`,
+    [status, adminNotes || null, issueId, minutes, usesLegacySeverity ? penaltySeverity : null, permanent]
   );
 }
 
@@ -56,7 +79,10 @@ async function getRideRestriction(role, accountId) {
   const roles = role === 'driver' ? ['driver'] : ['passenger', 'commuter'];
   return dbGet(
     `SELECT issue_id, restriction_until, penalty_minutes,
-            CEIL(EXTRACT(EPOCH FROM (restriction_until - NOW())))::integer AS remaining_seconds
+            restriction_until = 'infinity'::timestamptz AS penalty_permanent,
+            CASE WHEN isfinite(restriction_until) THEN
+              CEIL(EXTRACT(EPOCH FROM (restriction_until - NOW())))::integer
+            END AS remaining_seconds
      FROM issue_reports
      WHERE subject_role = ANY($1::text[]) AND subject_id = $2
        AND status IN ('validated','resolved') AND restriction_until > NOW()
@@ -67,11 +93,24 @@ async function getRideRestriction(role, accountId) {
 }
 
 function restrictionResponse(role, restriction) {
+  const code = role === 'driver' ? 'DRIVER_RIDE_SUSPENDED' : 'PASSENGER_BOOKING_COOLDOWN';
+  if (restriction.penalty_permanent) {
+    return {
+      success: false,
+      code,
+      message: role === 'driver'
+        ? 'An admin-validated report has permanently suspended you from accepting new rides.'
+        : 'An admin-validated report has permanently blocked you from booking new rides.',
+      permanent: true,
+      restrictedUntil: null,
+      retryAfterSeconds: null,
+    };
+  }
   const seconds = Math.max(1, Number(restriction.remaining_seconds));
   const minutes = Math.ceil(seconds / 60);
   return {
     success: false,
-    code: role === 'driver' ? 'DRIVER_RIDE_SUSPENDED' : 'PASSENGER_BOOKING_COOLDOWN',
+    code,
     message: role === 'driver'
       ? `An admin-validated report has temporarily suspended you from accepting new rides. Try again in ${minutes} minute(s).`
       : `An admin-validated report has paused your ride bookings. Try again in ${minutes} minute(s).`,
@@ -80,4 +119,4 @@ function restrictionResponse(role, restriction) {
   };
 }
 
-module.exports = { penaltyTarget, penaltyMinutes, reviewIssueReport, getRideRestriction, restrictionResponse };
+module.exports = { isPenaltyDuration, penaltyTarget, penaltyMinutes, reviewIssueReport, getRideRestriction, restrictionResponse };

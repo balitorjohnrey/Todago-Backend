@@ -1042,8 +1042,11 @@ async function initializeDatabase() {
        CHECK (penalty_severity IN ('standard','severe'))`
     );
     await client.query(
-      `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS penalty_minutes INTEGER
-       CHECK (penalty_minutes IN (30,60,1440,2880))`
+      `ALTER TABLE issue_reports
+       ADD COLUMN IF NOT EXISTS penalty_minutes INTEGER,
+       DROP CONSTRAINT IF EXISTS issue_reports_penalty_minutes_check,
+       ADD CONSTRAINT issue_reports_penalty_minutes_check
+       CHECK (penalty_minutes IN (30,60,180,300,720,1440,2880,10080))`
     );
     await client.query(
       `ALTER TABLE issue_reports ADD COLUMN IF NOT EXISTS restriction_until TIMESTAMPTZ`

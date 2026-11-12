@@ -456,7 +456,9 @@ router.post('/request', requireAuth, [
     if (driverRestriction) {
       return res.status(403).json({
         ...restrictionResponse('driver', driverRestriction),
-        message: 'This driver is temporarily suspended from accepting rides. Please choose another driver.',
+        message: driverRestriction.penalty_permanent
+          ? 'This driver is permanently suspended from accepting rides. Please choose another driver.'
+          : 'This driver is temporarily suspended from accepting rides. Please choose another driver.',
       });
     }
 

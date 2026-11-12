@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { dbRun, dbGet, dbAll } = require('../db/database');
-const { reviewIssueReport } = require('../services/reportPenalties');
+const { isPenaltyDuration, penaltyTarget, reviewIssueReport } = require('../services/reportPenalties');
 const { registerAdminMonitoring } = require('./adminMonitoring');
 const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
 const {
@@ -203,7 +203,7 @@ router.get('/reports', requireAdminAuth, async (req, res) => {
     }
 
     const reports = await dbAll(
-      `SELECT ir.*
+      `SELECT ir.*, COALESCE(ir.restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent
        FROM issue_reports ir
        ${where}
        ORDER BY
@@ -233,6 +233,10 @@ router.patch('/reports/:issueId/status', requireAdminAuth, [
   body('status')
     .isIn(['pending','validated','rejected','resolved'])
     .withMessage('Invalid report status'),
+  body('penaltyDuration')
+    .optional()
+    .custom(value => isPenaltyDuration(value))
+    .withMessage('Choose a valid penalty duration'),
   body('penaltySeverity')
     .optional()
     .isIn(['standard', 'severe'])
@@ -253,14 +257,20 @@ router.patch('/reports/:issueId/status', requireAdminAuth, [
     const updated = await reviewIssueReport(req.params.issueId, {
       status: req.body.status,
       adminNotes: req.body.adminNotes?.trim(),
+      penaltyDuration: req.body.penaltyDuration,
       penaltySeverity: req.body.penaltySeverity,
     });
 
+    let message = 'Report status updated.';
+    if (updated.status === 'validated' && (updated.penalty_permanent || updated.restriction_until)) {
+      const penalty = penaltyTarget(updated) === 'passenger' ? 'Booking restriction' : 'Driver ride suspension';
+      message = updated.penalty_permanent
+        ? `Report validated. ${penalty} applied permanently.`
+        : `Report validated. ${penalty} applied for ${reportDurationLabel(updated.penalty_minutes)}.`;
+    }
     return res.json({
       success: true,
-      message: updated.status === 'validated' && updated.restriction_until
-        ? `Report validated. ${updated.penalty_minutes < 1440 ? 'Passenger booking cooldown' : 'Driver ride suspension'}: ${updated.penalty_minutes < 1440 ? `${updated.penalty_minutes} minutes` : `${updated.penalty_minutes / 1440} day(s)`}.`
-        : 'Report status updated.',
+      message,
       report: updated,
     });
   } catch (error) {
@@ -269,6 +279,14 @@ router.patch('/reports/:issueId/status', requireAdminAuth, [
       message: error.statusCode ? error.message : 'Server error' });
   }
 });
+
+function reportDurationLabel(minutes) {
+  if (minutes === 10080) return '1 week';
+  if (minutes === 2880) return '2 days';
+  if (minutes === 60) return '1 hour';
+  if (minutes > 60) return `${minutes / 60} hours`;
+  return `${minutes} minutes`;
+}
 
 router.get('/analytics/routes', requireAdminAuth, async (req, res) => {
   try {

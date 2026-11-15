@@ -1039,10 +1039,15 @@ router.put('/:tripId/status', requireAuth, [
       return res.status(409).json({ success: false, message: `Trip is already ${trip.status}` });
     }
 
-    if (status === 'arrived' && !['pickup', 'ongoing', 'accepted'].includes(trip.status)) {
+    if (trip.status === 'arrived' && ['pickup', 'ongoing'].includes(status)) {
+      return res.status(409).json({ success: false, message: 'Trip has already arrived at the destination' });
+    }
+
+    if (status === 'arrived' && !['pickup', 'ongoing', 'accepted', 'arrived'].includes(trip.status)) {
       return res.status(409).json({ success: false, message: `Trip cannot be marked arrived while ${trip.status}` });
     }
 
+    let finalSharedDropoffAt = null;
     if (status === 'completed' || status === 'arrived') {
       const dropoffs = parseDropoffs(trip.shared_dropoffs);
       const remaining = Number.parseInt(trip.remaining_passenger_count, 10);
@@ -1056,6 +1061,11 @@ router.put('/:tripId/status', requireAuth, [
           success: false,
           message: `Drop the remaining ${remaining} passenger${remaining === 1 ? '' : 's'} before ${status === 'arrived' ? 'marking arrived' : 'completing this shared trip'}.`,
         });
+      }
+      if (status === 'arrived' && trip.service_type === 'shared' &&
+          dropoffs.length > 0 && dropoffs.every(dropoff => dropoff.status === 'dropped')) {
+        const timestamp = Date.parse(dropoffs.at(-1).dropped_at);
+        if (Number.isFinite(timestamp)) finalSharedDropoffAt = new Date(timestamp).toISOString();
       }
     }
 
@@ -1078,10 +1088,16 @@ router.put('/:tripId/status', requireAuth, [
 
     const changed = await dbRun(
       `UPDATE trips
-       SET status = $1
+       SET status = $1,
+           picked_up_at = CASE
+             WHEN $1 = 'ongoing' AND status IN ('requested', 'scheduled', 'accepted', 'pickup')
+             THEN COALESCE(picked_up_at, NOW()) ELSE picked_up_at END,
+           dropped_off_at = CASE
+             WHEN $1 = 'arrived' AND status <> 'arrived'
+             THEN COALESCE(dropped_off_at, $5::timestamptz, NOW()) ELSE dropped_off_at END
        WHERE trip_id = $2 AND status = $3
          AND payment_status IS NOT DISTINCT FROM $4`,
-      [status, req.params.tripId, trip.status, trip.payment_status]
+      [status, req.params.tripId, trip.status, trip.payment_status, finalSharedDropoffAt]
     );
     if (!changed.rowCount) {
       return res.status(409).json({ success: false, message: 'Trip changed. Refresh before trying again.' });
@@ -1107,7 +1123,7 @@ router.post('/:tripId/dropoff', requireAuth, async (req, res) => {
        FROM trips
        WHERE trip_id = $1
          AND driver_id = $2
-         AND status IN ('accepted','pickup','ongoing','arrived')`,
+         AND status IN ('pickup','ongoing')`,
       [req.params.tripId, req.userId]
     );
 
@@ -1127,22 +1143,33 @@ router.post('/:tripId/dropoff', requireAuth, async (req, res) => {
     if (nextIndex === -1) {
       return res.status(409).json({ success: false, message: 'All passengers are already dropped' });
     }
+    const expectedIndex = req.body?.dropoffIndex;
+    if (expectedIndex !== undefined && expectedIndex !== nextIndex) {
+      return res.status(409).json({ success: false, message: 'Drop-off already changed. Refresh before trying again.' });
+    }
 
+    const previousDropoffs = JSON.stringify(trip.shared_dropoffs);
+    const droppedAt = new Date().toISOString();
     dropoffs[nextIndex] = {
       ...dropoffs[nextIndex],
       status: 'dropped',
-      dropped_at: new Date().toISOString(),
+      dropped_at: droppedAt,
     };
 
     const pendingCount = dropoffs.filter((dropoff) => dropoff.status !== 'dropped').length;
-    await dbRun(
+    const changed = await dbRun(
       `UPDATE trips
        SET shared_dropoffs = $1::jsonb,
            remaining_passenger_count = $2,
+           dropped_off_at = CASE WHEN $2 = 0
+             THEN COALESCE(dropped_off_at, $4::timestamptz) ELSE dropped_off_at END,
            status = 'ongoing'
-       WHERE trip_id = $3`,
-      [JSON.stringify(dropoffs), pendingCount, trip.trip_id]
+       WHERE trip_id = $3 AND status = $5 AND shared_dropoffs = $6::jsonb`,
+      [JSON.stringify(dropoffs), pendingCount, trip.trip_id, droppedAt, trip.status, previousDropoffs]
     );
+    if (!changed.rowCount) {
+      return res.status(409).json({ success: false, message: 'Trip changed. Refresh before trying again.' });
+    }
 
     const updated = await dbGet(
       `SELECT tr.*,

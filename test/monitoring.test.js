@@ -400,6 +400,79 @@ test('trip monitoring uses real isolated PostgreSQL migrations and transactions'
     } finally { await f.pg.exec('ALTER TABLE trip_additional_charges DROP CONSTRAINT test_charge_failure'); }
   });
 
+  await t.test('ride timing records confirmed pickup and arrival separately from payment', async () => {
+    const booked = await f.book();
+    assert.equal(booked.code, 201, booked.data?.message);
+    const tripId = booked.data.trip.trip_id;
+    const driverRequest = (path, body = {}, method = 'put') => f.request('trips', path, {
+      method, role: 'driver', params: { tripId }, body,
+    });
+    const status = value => driverRequest('/:tripId/status', { status: value });
+    const readTrip = () => f.database.dbGet('SELECT * FROM trips WHERE trip_id = $1', [tripId]);
+
+    assert.equal((await driverRequest('/:tripId/accept')).code, 200);
+    assert.equal((await status('pickup')).code, 200);
+    assert.equal((await readTrip()).picked_up_at, null, 'arrival at pickup is not boarding');
+    assert.equal((await status('ongoing')).code, 200);
+    const pickup = (await readTrip()).picked_up_at;
+    assert.ok(pickup instanceof Date);
+    assert.equal((await status('ongoing')).code, 200);
+    assert.deepEqual((await readTrip()).picked_up_at, pickup);
+
+    assert.equal((await status('arrived')).code, 200);
+    const arrived = await readTrip();
+    assert.ok(arrived.dropped_off_at >= pickup);
+    assert.equal(arrived.end_timestamp, null);
+    assert.equal((await status('arrived')).code, 200);
+    assert.equal((await driverRequest('/:tripId/payment/collect', {}, 'post')).code, 200);
+
+    for (const [role, path] of [['passenger', '/commuter/history'], ['driver', '/driver/history']]) {
+      const history = await f.request('trips', path, { role });
+      assert.equal(history.code, 200);
+      const trip = history.data.trips.find(row => row.trip_id === tripId);
+      assert.equal(trip.status, 'completed');
+      assert.deepEqual(trip.picked_up_at, pickup);
+      assert.deepEqual(trip.dropped_off_at, arrived.dropped_off_at);
+      assert.ok(trip.end_timestamp >= arrived.dropped_off_at);
+    }
+  });
+
+  await t.test('a shared ride ends at its final drop-off and a stop retry stays on that stop', async () => {
+    const booked = await f.book({ serviceType: 'shared', passengerCount: 2, sharedDropoffs: [
+      { location: 'First stop', lat: 7.3, lng: 125.68 },
+      { location: 'Last stop', ...road[1] },
+    ] });
+    assert.equal(booked.code, 201, booked.data?.message);
+    const tripId = booked.data.trip.trip_id;
+    const driverRequest = (path, body = {}, method = 'put') => f.request('trips', path, {
+      method, role: 'driver', params: { tripId }, body,
+    });
+    const dropoff = dropoffIndex => driverRequest('/:tripId/dropoff', { dropoffIndex }, 'post');
+
+    assert.equal((await driverRequest('/:tripId/accept')).code, 200);
+    assert.equal((await driverRequest('/:tripId/status', { status: 'ongoing' })).code, 200);
+    await f.database.dbRun('UPDATE trips SET shared_dropoffs = to_jsonb(shared_dropoffs::text) WHERE trip_id = $1',
+      [tripId]);
+    const first = await dropoff(0);
+    assert.equal(first.code, 200, first.data?.message);
+    assert.equal(first.data.trip.dropped_off_at, null);
+    assert.equal((await dropoff(0)).code, 409);
+    assert.equal((await driverRequest('/:tripId/status', { status: 'arrived' })).code, 409);
+
+    const last = await dropoff(1);
+    assert.equal(last.code, 200, last.data?.message);
+    assert.equal(last.data.trip.remaining_passenger_count, 0);
+    assert.equal(last.data.trip.dropped_off_at.toISOString(), last.data.dropped_dropoff.dropped_at);
+    assert.equal((await driverRequest('/:tripId/status', { status: 'arrived' })).code, 200);
+    const result = await driverRequest('/:tripId', {}, 'get');
+    assert.deepEqual(result.data.trip.dropped_off_at, last.data.trip.dropped_off_at);
+
+    await f.database.dbRun("UPDATE trips SET status = 'ongoing', dropped_off_at = NULL WHERE trip_id = $1", [tripId]);
+    assert.equal((await driverRequest('/:tripId/status', { status: 'arrived' })).code, 200);
+    const legacy = await driverRequest('/:tripId', {}, 'get');
+    assert.deepEqual(legacy.data.trip.dropped_off_at, last.data.trip.dropped_off_at);
+  });
+
   await t.test('paid unrated trips and ratings refresh one performance report; operator data is scoped', async () => {
     const settlement = f.load('services/tripPayments.js');
     const booked = await f.book();

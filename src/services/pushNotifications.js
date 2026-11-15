@@ -18,6 +18,10 @@ const PUSH_TYPES = {
     title: 'Your driver is nearby', body: 'Get ready and head to your pickup point.',
     ttl: 90, statuses: ['accepted', 'pickup'],
   },
+  pickup_arrived: {
+    title: 'Your driver is at the pickup point', body: 'Please meet your driver to board.',
+    ttl: 180, statuses: ['accepted', 'pickup'],
+  },
   destination_arrived: {
     title: 'Arrived at your destination', body: 'Open TodaGo to view your trip and payment options.',
     ttl: 300, statuses: ['arrived'],
@@ -25,6 +29,10 @@ const PUSH_TYPES = {
   booking_cancelled: {
     title: 'Booking cancelled', body: 'Open TodaGo for an update on your booking.',
     ttl: 300,
+  },
+  passenger_no_show: {
+    title: 'Booking cancelled', body: 'Your driver cancelled after waiting at the pickup point.',
+    ttl: 300, statuses: ['cancelled'],
   },
   trip_message: {
     title: 'New trip message', body: 'Open TodaGo to read your message.',
@@ -91,7 +99,7 @@ async function notify(query, event) {
 }
 
 async function queuePickupProximity(database, trip, driverId, position) {
-  if (!enabled() || !trip?.commuter_id || trip.pickup_near_queued_at || trip.picked_up_at) return;
+  if (!enabled() || !trip?.commuter_id || trip.pickup_near_queued_at || trip.pickup_arrived_at || trip.picked_up_at) return;
   const leg = currentRouteLeg(trip);
   if (leg?.key !== 'pickup' || !validPoint(leg.target)) return;
   const configured = Number(process.env.TODAGO_PICKUP_PUSH_RADIUS_METERS);
@@ -102,7 +110,7 @@ async function queuePickupProximity(database, trip, driverId, position) {
     UPDATE trips SET pickup_near_queued_at = NOW()
     WHERE trip_id = $1 AND driver_id = $2 AND commuter_id = $3
       AND status IN ('accepted', 'pickup') AND picked_up_at IS NULL
-      AND pickup_near_queued_at IS NULL
+      AND pickup_near_queued_at IS NULL AND pickup_arrived_at IS NULL
       AND EXISTS (SELECT 1 FROM push_devices
         WHERE user_role = 'passenger' AND user_id = $3)`,
   [trip.trip_id, driverId, trip.commuter_id]);
@@ -135,7 +143,7 @@ async function deliverPushBatch(pool, send) {
       LEFT JOIN trips t ON t.trip_id = $4
       WHERE d.token = $1 AND d.user_role = $2 AND d.user_id = $3
         AND ($5::text[] IS NULL OR t.status = ANY($5))
-        AND ($6 <> 'driver_near_pickup' OR t.picked_up_at IS NULL)`,
+        AND ($6 <> 'driver_near_pickup' OR (t.pickup_arrived_at IS NULL AND t.picked_up_at IS NULL))`,
     [token, user_role, user_id, delivery.trip_id, statuses || null, type]);
     if (devices.length) {
       let result;

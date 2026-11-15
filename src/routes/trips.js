@@ -967,24 +967,65 @@ router.post('/:tripId/payment/collect', requireAuth, async (req, res) => {
   }
 });
 
+router.put('/:tripId/pickup-arrival', requireAuth, async (req, res) => {
+  if (req.userRole !== 'driver') {
+    return res.status(403).json({ success: false, message: 'Driver access only' });
+  }
+  const tripId = req.params.tripId;
+  const args = [tripId, req.userId];
+  try {
+    const arrived = await dbGet(
+      `UPDATE trips SET pickup_arrived_at = NOW()
+       WHERE trip_id = $1 AND driver_id = $2 AND status IN ('accepted', 'pickup')
+         AND pickup_arrived_at IS NULL AND picked_up_at IS NULL
+         AND service_type IS DISTINCT FROM 'pickup'
+       RETURNING commuter_id, pickup_arrived_at`,
+      args
+    );
+    if (arrived) {
+      await notify(dbRun, {
+        type: 'pickup_arrived', eventId: tripId, tripId,
+        role: 'passenger', userId: arrived.commuter_id,
+      });
+      return res.json({ success: true, pickup_arrived_at: arrived.pickup_arrived_at });
+    }
+
+    const trip = await dbGet(
+      `SELECT status, service_type, pickup_arrived_at, picked_up_at FROM trips
+       WHERE trip_id = $1 AND driver_id = $2`,
+      args
+    );
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
+    if (['accepted', 'pickup'].includes(trip.status) && trip.service_type !== 'pickup' &&
+        trip.pickup_arrived_at && !trip.picked_up_at) {
+      return res.json({ success: true, pickup_arrived_at: trip.pickup_arrived_at });
+    }
+    return res.status(409).json({ success: false, message: 'Pickup arrival is only available before boarding.' });
+  } catch (err) {
+    console.error('[Trips] Pickup arrival error:', err.message);
+    return res.status(500).json({ success: false, message: 'Could not mark pickup arrival' });
+  }
+});
+
 // ── PUT /api/trips/:tripId/status ─────────────────────────────────────────────
 router.put('/:tripId/status', requireAuth, [
   body('status')
     .isIn(['pickup','ongoing','arrived','completed','cancelled'])
     .withMessage('Invalid status'),
+  body('reason').optional().isIn(['passenger_no_show']).withMessage('Invalid cancellation reason'),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(422).json({ success: false, message: errors.array()[0].msg });
   }
 
-  const { status } = req.body;
+  const { status, reason } = req.body;
 
   try {
     const trip = await dbGet(
       `SELECT trip_id, commuter_id, driver_id, status, fare,
                service_type, passenger_count, shared_dropoffs,
-               remaining_passenger_count, payment_method, payment_status
+               remaining_passenger_count, payment_method, payment_status, cancellation_reason
        FROM trips
        WHERE trip_id = $1`,
       [req.params.tripId]
@@ -1001,38 +1042,74 @@ router.put('/:tripId/status', requireAuth, [
       trip.commuter_id === req.userId;
 
     if (status === 'cancelled') {
+      const noShow = reason === 'passenger_no_show';
       if (!isAssignedDriver && !isTripPassenger) {
         return res.status(403).json({ success: false, message: 'Not allowed to cancel this trip' });
+      }
+      if (noShow && !isAssignedDriver) {
+        return res.status(403).json({ success: false, message: 'Only the assigned driver can cancel for a passenger no-show.' });
+      }
+      const response = {
+        success: true,
+        message: isTripPassenger ? 'Trip cancelled. Driver notified.' : 'Trip cancelled.',
+        cancelled_by: isTripPassenger ? 'passenger' : 'driver',
+      };
+      if (noShow && trip.status === 'cancelled' && trip.cancellation_reason === reason) {
+        return res.json(response);
       }
       if (trip.status === 'completed') {
         return res.status(409).json({ success: false, message: 'Completed trips cannot be cancelled' });
       }
 
-      const cancelled = await dbRun(
-        `UPDATE trips
-         SET status = 'cancelled',
-             end_timestamp = COALESCE(end_timestamp, NOW())
-         WHERE trip_id = $1 AND status NOT IN ('completed','cancelled')
-           AND payment_status IS DISTINCT FROM 'paid'`,
-        [trip.trip_id]
-      );
+      const client = await pool.connect();
+      let cancelled;
+      try {
+        await client.query('BEGIN');
+        // GPS tracking and trip settlement also lock the driver before the trip.
+        if (trip.driver_id) {
+          await client.query('SELECT driver_id FROM drivers WHERE driver_id = $1 FOR UPDATE', [trip.driver_id]);
+        }
+        cancelled = await client.query(
+          `UPDATE trips
+           SET status = 'cancelled',
+               end_timestamp = COALESCE(end_timestamp, NOW()),
+               cancellation_reason = $2::text
+           WHERE trip_id = $1 AND status NOT IN ('completed','cancelled')
+             AND payment_status IS DISTINCT FROM 'paid'
+             AND ($2::text IS NULL OR (
+               status IN ('accepted', 'pickup') AND pickup_arrived_at IS NOT NULL
+               AND picked_up_at IS NULL AND service_type IS DISTINCT FROM 'pickup'
+             ))`,
+          [trip.trip_id, noShow ? reason : null]
+        );
+        if (cancelled.rowCount && trip.driver_id) {
+          await client.query(
+            `UPDATE drivers
+             SET status = 'online',
+                 online_since = COALESCE(online_since, NOW()),
+                 updated_at = NOW()
+             WHERE driver_id = $1`,
+            [trip.driver_id]
+          );
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
       if (!cancelled.rowCount) {
+        if (noShow) {
+          const latest = await dbGet('SELECT status, cancellation_reason FROM trips WHERE trip_id = $1', [trip.trip_id]);
+          if (latest?.status === 'cancelled' && latest.cancellation_reason === reason) return res.json(response);
+          return res.status(409).json({ success: false, message: 'No-show cancellation is only available after arrival and before boarding on an unpaid booking.' });
+        }
         return res.status(409).json({ success: false, message: 'Paid or finished trips cannot be cancelled. Contact support for a payment issue.' });
       }
 
-      if (trip.driver_id) {
-        await dbRun(
-          `UPDATE drivers
-           SET status = 'online',
-               online_since = COALESCE(online_since, NOW()),
-               updated_at = NOW()
-           WHERE driver_id = $1`,
-          [trip.driver_id]
-        );
-      }
-
       await notify(dbRun, {
-        type: 'booking_cancelled', eventId: trip.trip_id, tripId: trip.trip_id,
+        type: noShow ? 'passenger_no_show' : 'booking_cancelled', eventId: trip.trip_id, tripId: trip.trip_id,
         role: isTripPassenger ? 'driver' : 'passenger',
         userId: isTripPassenger ? trip.driver_id : trip.commuter_id,
       });
@@ -1040,13 +1117,7 @@ router.put('/:tripId/status', requireAuth, [
         `[Trips] Cancelled by ${isTripPassenger ? 'passenger' : 'driver'}: ${trip.trip_id}`
       );
 
-      return res.json({
-        success: true,
-        message: isTripPassenger
-          ? 'Trip cancelled. Driver notified.'
-          : 'Trip cancelled.',
-        cancelled_by: isTripPassenger ? 'passenger' : 'driver',
-      });
+      return res.json(response);
     }
 
     if (!isAssignedDriver) {

@@ -504,9 +504,11 @@ async function initializeDatabase() {
         driver_location_updated_at TIMESTAMPTZ,
         request_timestamp TIMESTAMPTZ DEFAULT NOW(),
         pickup_timestamp  TIMESTAMPTZ,
+        pickup_arrived_at TIMESTAMPTZ,
         picked_up_at      TIMESTAMPTZ,
         dropped_off_at    TIMESTAMPTZ,
         end_timestamp     TIMESTAMPTZ,
+        cancellation_reason TEXT,
         created_at        TIMESTAMPTZ DEFAULT NOW()
       )
     `);
@@ -531,8 +533,10 @@ async function initializeDatabase() {
     // Add missing columns if upgrading from old schema
     await client.query(
       `ALTER TABLE trips
+       ADD COLUMN IF NOT EXISTS pickup_arrived_at TIMESTAMPTZ,
        ADD COLUMN IF NOT EXISTS picked_up_at TIMESTAMPTZ,
-       ADD COLUMN IF NOT EXISTS dropped_off_at TIMESTAMPTZ`
+       ADD COLUMN IF NOT EXISTS dropped_off_at TIMESTAMPTZ,
+       ADD COLUMN IF NOT EXISTS cancellation_reason TEXT`
     );
     await client.query(
       `ALTER TABLE trips ADD COLUMN IF NOT EXISTS wait_time_seconds INT DEFAULT 0`

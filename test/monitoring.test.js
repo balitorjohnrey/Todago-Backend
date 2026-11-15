@@ -179,6 +179,73 @@ test('pickup pushes go to the booked passenger once across concurrent GPS sample
   assert.deepEqual(sent, [['booking_cancelled', first, 'Booking cancelled']]);
 });
 
+test('the assigned driver can cancel an unpaid booking for a no-show after marking pickup arrival', async t => {
+  const f = await fixture();
+  t.after(f.close);
+  await f.seed();
+  f.env.FCM_SERVICE_ACCOUNT_JSON = 'test-delivery-is-injected';
+  await f.request('pushDevices', '/', {
+    method: 'put', role: 'passenger', body: { token: 'passenger-one-device-1' },
+  });
+
+  const tripId = (await f.book()).data.trip.trip_id;
+  const put = (route, body, options = {}) => f.request('trips', route, {
+    method: 'put', role: 'driver', params: { tripId }, body, ...options,
+  });
+  const arrive = options => put('/:tripId/pickup-arrival', {}, options);
+  const cancel = options => put('/:tripId/status', {
+    status: 'cancelled', reason: 'passenger_no_show',
+  }, options);
+  assert.equal((await arrive()).code, 409);
+  assert.equal((await put('/:tripId/accept')).code, 200);
+  assert.equal((await cancel()).code, 409);
+  assert.equal((await arrive({ role: 'passenger' })).code, 403);
+  assert.equal((await arrive({ id: 'driver-2' })).code, 404);
+  assert.equal((await cancel({ id: 'driver-2' })).code, 403);
+  assert.equal((await cancel({ role: 'passenger' })).code, 403);
+
+  const arrival = await arrive();
+  assert.equal(arrival.code, 200);
+  assert.equal(+new Date(arrival.data.pickup_arrived_at),
+    +new Date((await arrive()).data.pickup_arrived_at));
+  const trip = () => f.request('trips', '/:tripId', { role: 'passenger', params: { tripId } });
+  assert.equal((await trip()).data.trip.status, 'accepted');
+  assert.equal((await trip()).data.trip.picked_up_at, null);
+
+  const delivered = [];
+  const send = async (job, notification) => {
+    delivered.push([job.type, notification.title]);
+    return 'sent';
+  };
+  const { deliverPushBatch } = f.load('services/pushNotifications.js');
+  await deliverPushBatch(f.database.pool, send);
+  assert.deepEqual(delivered.filter(([type]) => type === 'pickup_arrived'),
+    [['pickup_arrived', 'Your driver is at the pickup point']]);
+
+  const replies = await Promise.all([cancel(), cancel()]);
+  assert.deepEqual(replies.map(reply => reply.code), [200, 200]);
+  const cancelled = (await trip()).data.trip;
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.cancellation_reason, 'passenger_no_show');
+  assert.equal(cancelled.payment_status, 'unpaid');
+  assert.ok(cancelled.end_timestamp);
+  assert.equal((await put('/:tripId/status', { status: 'ongoing' })).code, 409);
+  assert.equal((await f.database.dbGet('SELECT status FROM drivers WHERE driver_id = $1',
+    ['driver-1'])).status, 'online');
+  assert.equal((await f.request('trips', '/driver/active', { role: 'driver' })).data.trip, null);
+  await deliverPushBatch(f.database.pool, send);
+  assert.deepEqual(delivered.filter(([type]) => type === 'passenger_no_show'),
+    [['passenger_no_show', 'Booking cancelled']]);
+
+  const nextTripId = (await f.book()).data.trip.trip_id;
+  const nextOptions = { params: { tripId: nextTripId } };
+  assert.equal((await put('/:tripId/accept', {}, nextOptions)).code, 200);
+  assert.equal((await arrive(nextOptions)).code, 200);
+  assert.equal((await put('/:tripId/status', { status: 'ongoing' }, nextOptions)).code, 200);
+  assert.equal((await cancel(nextOptions)).code, 409);
+  assert.equal((await arrive(nextOptions)).code, 409);
+});
+
 test('validated report penalties expire on schedule and permanent restrictions stay active', async t => {
   const f = await fixture();
   t.after(f.close);

@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 const { syncDriverPerformance } = require('../services/driverPerformance');
+const { initializePushTables } = require('../services/pushNotifications');
 
 if (!process.env.DATABASE_URL) {
   console.error('[DB] ERROR: DATABASE_URL is not set.');
@@ -1197,6 +1198,7 @@ async function initializeDatabase() {
       const summary = await runWalletReset(pool, process.env.WALLET_RESET_REQUEST_ID.trim());
       console.log('[Wallet] Reset result:', JSON.stringify(summary));
     }
+    await initializePushTables(client);
     console.log('[DB] All tables initialized successfully ✅');
   } catch (err) {
     console.error('[DB] Initialization error:', err.message);

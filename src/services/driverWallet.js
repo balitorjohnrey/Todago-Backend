@@ -1,6 +1,7 @@
 const { pool } = require('../db/database');
 const { MIN_DRIVER_CASHOUT, amountInCentavos } = require('./paymentLimits');
 const { isLiveMode } = require('./paymongo');
+const { enqueuePush } = require('./pushNotifications');
 
 function fail(message, statusCode = 409) {
   const error = new Error(message);
@@ -88,10 +89,15 @@ async function requestCashOut(driverId, { amount, provider, accountName, account
     const active = (await client.query(`SELECT cashout_id FROM driver_cashouts
       WHERE driver_id = $1 AND status IN ('pending','processing') LIMIT 1`, [driverId])).rows[0];
     if (active) fail('You already have a pending cash-out. Refresh your history before requesting another.');
-    return (await client.query(`INSERT INTO driver_cashouts
+    const cashout = (await client.query(`INSERT INTO driver_cashouts
       (driver_id, amount, provider, account_name, account_number, request_key)
       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     [driverId, cents / 100, provider, accountName.trim(), accountNumber, requestKey])).rows[0];
+    await enqueuePush(client.query.bind(client), {
+      type: 'cashout_requested', eventId: cashout.cashout_id,
+      role: 'payout_admin', userId: 'todago-payout-admin',
+    });
+    return cashout;
   });
 }
 

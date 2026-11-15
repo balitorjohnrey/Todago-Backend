@@ -1,6 +1,7 @@
 const { pool } = require('../db/database');
 const { recordDriverServiceAreaAlert, recordDriverRouteAlert } = require('../utils/adminReports');
 const { classifyServiceArea } = require('../utils/serviceAreas');
+const { queuePickupProximity } = require('./pushNotifications');
 const { validPoint, routeForTrip, normalizeRoutePoints, distanceToRouteMeters, routeToleranceMeters } = require('../utils/routeMonitoring');
 
 async function recordDriverGpsLocation(driverId, lat, lng, { tripId = null, source = 'online_driver_location' } = {}) {
@@ -46,6 +47,7 @@ async function recordDriverGpsLocation(driverId, lat, lng, { tripId = null, sour
       await recordDriverRouteAlert(driverId, lat, lng, { ...context,
         routeLeg: leg.key, distanceMeters: routeDistance, toleranceMeters: tolerance }, database);
     }
+    await queuePickupProximity(database, trip, driverId, { lat, lng });
     await client.query('COMMIT');
     return { ...area, observed_at: location.observed_at };
   } catch (error) {

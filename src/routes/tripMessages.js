@@ -1,3 +1,5 @@
+const { notify } = require('../services/pushNotifications');
+
 const OPEN_STATUSES = ['accepted', 'pickup', 'ongoing', 'arrived'];
 const INBOX_PAGE_SIZE = 30;
 const THREAD_PAGE_SIZE = 40;
@@ -22,7 +24,7 @@ function requireTripParticipantRole(req, res, next) {
   next();
 }
 
-function registerTripMessages(router, requireAuth, { dbGet, dbAll }) {
+function registerTripMessages(router, requireAuth, { dbGet, dbAll, dbRun }) {
   router.get('/conversations', requireAuth, requireTripParticipantRole, async (req, res) => {
     const { before, beforeTripId } = req.query;
     if ((before !== undefined || beforeTripId !== undefined)
@@ -125,16 +127,27 @@ function registerTripMessages(router, requireAuth, { dbGet, dbAll }) {
       // a message have a definite order, including concurrent requests.
       const inserted = await dbGet(`
         WITH open_trip AS (
-          SELECT tr.trip_id FROM trips tr
+          SELECT tr.trip_id, tr.driver_id, tr.commuter_id FROM trips tr
           WHERE tr.${ownerColumn} = $1 AND tr.trip_id = $3 AND ${CAN_SEND}
           FOR NO KEY UPDATE
+        ), new_message AS (
+          INSERT INTO trip_messages (trip_id, sender_role, request_id, body)
+          SELECT trip_id, $4, $5, $6 FROM open_trip
+          ON CONFLICT (trip_id, sender_role, request_id) DO NOTHING
+          RETURNING trip_id, message_id
         )
-        INSERT INTO trip_messages (trip_id, sender_role, request_id, body)
-        SELECT trip_id, $4, $5, $6 FROM open_trip
-        ON CONFLICT (trip_id, sender_role, request_id) DO NOTHING
-        RETURNING message_id::text`,
+        SELECT m.message_id::text, t.driver_id, t.commuter_id
+        FROM new_message m JOIN open_trip t USING (trip_id)`,
       [req.userId, OPEN_STATUSES, tripId, senderRole, requestId, text]);
-      if (inserted) return res.status(201).json({ success: true });
+      if (inserted) {
+        const fromDriver = senderRole === 'driver';
+        await notify(dbRun, {
+          type: 'trip_message', eventId: inserted.message_id, tripId,
+          role: fromDriver ? 'passenger' : 'driver',
+          userId: fromDriver ? inserted.commuter_id : inserted.driver_id,
+        });
+        return res.status(201).json({ success: true });
+      }
 
       // A retry can acknowledge a committed message even if the trip has closed.
       const prior = await dbGet(`

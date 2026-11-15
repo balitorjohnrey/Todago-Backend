@@ -69,7 +69,7 @@ async function fixture() {
   catch (error) { await pg.close(); throw error; }
   const routers = { trips: load('routes/trips.js'), admin: load('routes/admin_auth.js'),
     operator: load('routes/operator_auth.js'), reports: load('routes/reports.js'),
-    driver: load('routes/driver_auth.js') };
+    driver: load('routes/driver_auth.js'), pushDevices: load('routes/pushDevices.js') };
 
   async function request(router, routePath, { method = 'get', role = 'admin', id = `${role}-1`,
     body = {}, query: queryParams = {}, params = {} } = {}) {
@@ -78,7 +78,8 @@ async function fixture() {
     const route = routers[router].stack.find(layer => layer.route?.path === routePath && layer.route.methods[method]).route;
     const req = { headers: { authorization: `Bearer ${token}` }, body, params, query: queryParams };
     let code = 200, data;
-    const res = { status(value) { code = value; return res; }, json(value) { data = value; return res; } };
+    const res = { status(value) { code = value; return res; },
+      json(value) { data = value; return res; }, end() { data = null; } };
     for (const layer of route.stack) {
       await layer.handle(req, res, error => { if (error) throw error; });
       if (data !== undefined) break;
@@ -112,6 +113,71 @@ async function fixture() {
   }
   return { pg, database, request, seed, book, load, initializer, env, close: () => pg.close() };
 }
+
+test('pickup pushes go to the booked passenger once across concurrent GPS samples', async t => {
+  const f = await fixture();
+  t.after(f.close);
+  await f.seed();
+  f.env.FCM_SERVICE_ACCOUNT_JSON = 'test-delivery-is-injected';
+
+  const device = (token, options = {}) => f.request('pushDevices', '/', {
+    method: 'put', role: 'passenger', body: { token }, ...options,
+  });
+  const first = 'passenger-one-device-1';
+  const second = 'passenger-one-device-2';
+  const other = 'passenger-two-device-1';
+  const driverToken = 'driver-one-device-1-token';
+  assert.equal((await device(first)).code, 204);
+  assert.equal((await device(second)).code, 204);
+  assert.equal((await device(other, { id: 'passenger-2' })).code, 204);
+  assert.equal((await device(driverToken, { role: 'driver' })).code, 204);
+  assert.equal((await device('malformed token')).code, 422);
+
+  const tripId = (await f.book()).data.trip.trip_id;
+  const tripRequest = (route, body, options = {}) => f.request('trips', route, {
+    method: 'put', role: 'driver', params: { tripId }, body, ...options,
+  });
+  const sample = (lat, options) => tripRequest('/:tripId/driver-location', { lat, lng: road[0].lng }, options);
+  assert.equal((await sample(road[0].lat)).code, 409);
+  assert.equal((await tripRequest('/:tripId/accept')).code, 200);
+  assert.equal((await sample(road[0].lat, { id: 'driver-2' })).code, 404);
+  assert.equal((await sample(road[0].lat + 0.003)).code, 200);
+
+  const pendingNearby = () => f.database.dbAll(`
+    SELECT token FROM push_deliveries WHERE type = 'driver_near_pickup' ORDER BY token`);
+  assert.deepEqual(await pendingNearby(), []);
+  const replies = await Promise.all([sample(road[0].lat + 0.002), sample(road[0].lat)]);
+  assert.deepEqual(replies.map(reply => reply.code), [200, 200]);
+  assert.deepEqual(await pendingNearby(), [{ token: first }, { token: second }]);
+
+  // A device handed to another account must neither deliver the old push nor
+  // let the previous account remove the new account's registration.
+  assert.equal((await device(second, { id: 'passenger-2' })).code, 204);
+  assert.equal((await device(second, { method: 'delete' })).code, 204);
+  assert.equal((await f.database.dbGet('SELECT user_id FROM push_devices WHERE token = $1', [second])).user_id,
+    'passenger-2');
+  const sent = [];
+  const send = async (job, notification) => {
+    sent.push([job.type, job.token, notification.title]);
+    return 'sent';
+  };
+  const { deliverPushBatch } = f.load('services/pushNotifications.js');
+  await deliverPushBatch(f.database.pool, send);
+  assert.deepEqual(sent.filter(([type]) => type === 'driver_near_pickup'),
+    [['driver_near_pickup', first, 'Your driver is nearby']]);
+  assert.deepEqual(await pendingNearby(), []);
+  assert.equal((await sample(road[0].lat)).code, 200);
+  assert.deepEqual(await pendingNearby(), []);
+
+  // The worker drops an alert if the trip ends before FCM receives it.
+  await f.database.dbRun(`
+    UPDATE trips SET pickup_near_queued_at = NULL WHERE trip_id = $1`, [tripId]);
+  assert.equal((await sample(road[0].lat)).code, 200);
+  assert.equal((await tripRequest('/:tripId/status', { status: 'cancelled' })).code, 200);
+  sent.length = 0;
+  await deliverPushBatch(f.database.pool, send);
+  assert.deepEqual(sent, [['booking_cancelled', first, 'Booking cancelled']]);
+});
 
 test('validated report penalties expire on schedule and permanent restrictions stay active', async t => {
   const f = await fixture();

@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const { initializeDatabase, pool } = require('./db/database');
+const { startPushDelivery } = require('./services/pushNotifications');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -38,6 +39,7 @@ const aiRouter = require('./routes/ai');
 const migrateRouter = require('./db/migrate');
 const faresRouter = require('./routes/fares');
 const reportsRouter = require('./routes/reports');
+const pushDevicesRouter = require('./routes/pushDevices');
 const { router: kycRouter } = require('./routes/kyc');
 
 app.use('/api/migrate',       migrateRouter);
@@ -52,6 +54,7 @@ app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/ai',            aiRouter);
 app.use('/api/fares',         faresRouter);
 app.use('/api/reports',       reportsRouter);
+app.use('/api/push-devices',  pushDevicesRouter);
 app.use('/api/kyc',           kycRouter);
 
 app.get('/', (req, res) => {
@@ -96,6 +99,7 @@ async function start() {
       require('./services/merchantQrWallet').configuration().ready);
     app.listen(PORT, () => {
       console.log(`[App] Server running on port ${PORT}`);
+      startPushDelivery(pool);
     });
   } catch (err) {
     console.error('[App] Failed to start:', err.message);

@@ -23,6 +23,7 @@ const { handleWalletPaymentEvent } = require('../services/walletIntentPayments')
 const { settleStaticQrPayment } = require('../services/walletStaticQr');
 const { completePaidTrip } = require('../services/tripPayments');
 const { registerTripMessages } = require('./tripMessages');
+const { notify } = require('../services/pushNotifications');
 
 const router = express.Router();
 const EXTERNAL_KYC_PROVIDERS = new Set(['didit', 'persona']);
@@ -582,6 +583,10 @@ router.post('/request', requireAuth, [
     const trip = await dbGet(
       `SELECT * FROM trips WHERE trip_id = $1`, [tripId]
     );
+    await notify(dbRun, {
+      type: isScheduled ? 'reservation_created' : 'booking_requested',
+      eventId: tripId, tripId, role: 'driver', userId: driverId,
+    });
 
     console.log(
       `[Trips] ${isScheduled ? 'Reservation scheduled' : 'Ride requested'}: ${passenger.full_name} → ${driver.driver_name}`
@@ -663,12 +668,15 @@ router.put('/:tripId/accept', requireAuth, async (req, res) => {
         success: false, message: 'Trip not found or already handled',
       });
     }
-    await dbRun(
+    const accepted = await dbRun(
       `UPDATE trips
        SET status = 'accepted', pickup_timestamp = NOW()
-       WHERE trip_id = $1`,
-      [req.params.tripId]
+       WHERE trip_id = $1 AND driver_id = $2 AND status IN ('requested', 'scheduled')`,
+      [req.params.tripId, req.userId]
     );
+    if (!accepted.rowCount) {
+      return res.status(404).json({ success: false, message: 'Trip not found or already handled' });
+    }
     await dbRun(
       `UPDATE drivers
        SET status = 'on_trip',
@@ -677,6 +685,10 @@ router.put('/:tripId/accept', requireAuth, async (req, res) => {
        WHERE driver_id = $1`,
       [req.userId]
     );
+    await notify(dbRun, {
+      type: 'driver_accepted', eventId: trip.trip_id, tripId: trip.trip_id,
+      role: 'passenger', userId: trip.commuter_id,
+    });
     console.log(`[Trips] Trip accepted: ${req.params.tripId}`);
     return res.json({ success: true, message: 'Trip accepted! Navigate to pickup.' });
   } catch (err) {
@@ -690,11 +702,15 @@ router.put('/:tripId/decline', requireAuth, async (req, res) => {
     return res.status(403).json({ success: false, message: 'Driver access only' });
   }
   try {
-    await dbRun(
+    const declined = await dbGet(
       `UPDATE trips SET status = 'cancelled'
-       WHERE trip_id = $1 AND driver_id = $2`,
+       WHERE trip_id = $1 AND driver_id = $2 AND status IN ('requested', 'scheduled')
+       RETURNING trip_id, commuter_id`,
       [req.params.tripId, req.userId]
     );
+    if (!declined) {
+      return res.status(404).json({ success: false, message: 'Trip not found or already handled' });
+    }
     await dbRun(
       `UPDATE drivers
        SET status = 'online',
@@ -703,6 +719,10 @@ router.put('/:tripId/decline', requireAuth, async (req, res) => {
        WHERE driver_id = $1`,
       [req.userId]
     );
+    await notify(dbRun, {
+      type: 'booking_cancelled', eventId: declined.trip_id, tripId: declined.trip_id,
+      role: 'passenger', userId: declined.commuter_id,
+    });
     return res.json({ success: true, message: 'Trip declined.' });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Server error' });
@@ -1011,6 +1031,11 @@ router.put('/:tripId/status', requireAuth, [
         );
       }
 
+      await notify(dbRun, {
+        type: 'booking_cancelled', eventId: trip.trip_id, tripId: trip.trip_id,
+        role: isTripPassenger ? 'driver' : 'passenger',
+        userId: isTripPassenger ? trip.driver_id : trip.commuter_id,
+      });
       console.log(
         `[Trips] Cancelled by ${isTripPassenger ? 'passenger' : 'driver'}: ${trip.trip_id}`
       );
@@ -1101,6 +1126,12 @@ router.put('/:tripId/status', requireAuth, [
     );
     if (!changed.rowCount) {
       return res.status(409).json({ success: false, message: 'Trip changed. Refresh before trying again.' });
+    }
+    if (status === 'arrived' && trip.status !== status) {
+      await notify(dbRun, {
+        type: 'destination_arrived', eventId: trip.trip_id, tripId: trip.trip_id,
+        role: 'passenger', userId: trip.commuter_id,
+      });
     }
 
     return res.json({ success: true, message: `Status updated to ${status}` });
@@ -1430,7 +1461,7 @@ router.get('/driver/scheduled', requireAuth, async (req, res) => {
   }
 });
 
-registerTripMessages(router, requireAuth, { dbGet, dbAll });
+registerTripMessages(router, requireAuth, { dbGet, dbAll, dbRun });
 
 // Get a single trip for owner polling (driver/passenger notification flows)
 router.get('/:tripId', requireAuth, async (req, res) => {

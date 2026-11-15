@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet } = require('../db/database');
+const { enqueuePush } = require('../services/pushNotifications');
 const defaultDatabase = { dbRun, dbGet };
 
 async function createIssueReport({
@@ -75,7 +76,7 @@ async function recordLocationAlert(driverId, lat, lng, context, config, database
   }
 
   const driver = await database.dbGet(
-    `SELECT d.driver_name, d.toda_body_number, t.plate_no,
+    `SELECT d.driver_name, d.toda_id, d.toda_body_number, t.plate_no,
             ta.association_name, ta.association_code
      FROM drivers d
      LEFT JOIN tricycles t ON t.driver_id = d.driver_id
@@ -107,6 +108,9 @@ async function recordLocationAlert(driverId, lat, lng, context, config, database
     priority: 'high',
   }, database);
 
+  const alert = { type: 'fleet_gps_alert', eventId: report.issue_id };
+  await enqueuePush(database.dbRun, { ...alert, role: 'admin', userId: 'todago-admin' });
+  await enqueuePush(database.dbRun, { ...alert, role: 'operator', todaId: driver?.toda_id });
   return { outside: true, saved: true, issueId: report.issue_id };
 }
 

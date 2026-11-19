@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "faq:sync": "node scripts/sync-faqs.js",
+    "faq:check": "node scripts/sync-faqs.js --check"
   },
   "engines": {
     "node": ">=18.0.0"

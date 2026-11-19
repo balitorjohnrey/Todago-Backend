@@ -1,0 +1,4189 @@
+{
+  "schemaVersion": 2,
+  "version": "2026-11-19.2",
+  "provenance": "A source-linked adaptation of public Angkas, Grab, and Uber FAQ/help collections, with BSP, GCash, PayMongo, and Google guidance. Question topics are paraphrased and answers are rewritten for TodaGo, then checked against project source code. No MFAQ/FAQIR benchmark records, customer conversations, or private account exports were imported.",
+  "quickQuestions": {
+    "passenger": [
+      "book_ride",
+      "cancel_trip",
+      "fares",
+      "payment_methods",
+      "wallet_top_up",
+      "track_driver",
+      "faq_sources"
+    ],
+    "driver": [
+      "driver_online",
+      "accept_request",
+      "complete_trip",
+      "driver_earnings",
+      "driver_cash_out",
+      "report_issue",
+      "faq_sources"
+    ],
+    "guest": [
+      "book_ride",
+      "schedule_ride",
+      "service_types",
+      "fares",
+      "location_access",
+      "directions",
+      "faq_sources"
+    ]
+  },
+  "entries": [
+    {
+      "id": "book_ride",
+      "category": "booking",
+      "question": "How do I book a ride?",
+      "answer": "Sign in as a passenger and tap Book Now. Choose your destination and route, review the fare, then choose a service and tap Find a Driver. Select an available driver and confirm your request. The waiting screen shows progress; live tracking is available after the driver accepts.",
+      "aliases": [
+        "How can I request a ride?",
+        "Paano mag book ng ride?",
+        "Unsaon pag book ug ride?"
+      ],
+      "keywords": [
+        "book",
+        "booking",
+        "request a ride",
+        "book now",
+        "mag book",
+        "pag book"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Book Now"
+        },
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "Find a Driver"
+        },
+        {
+          "path": "todago_flutter/lib/driver_selection_screen.dart",
+          "locator": "DriverSelectionScreen"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_consumer",
+          "topic": "Requesting a passenger service",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "cancel_trip",
+      "category": "booking",
+      "question": "How do I cancel a trip?",
+      "answer": "Use Cancel Ride on the waiting screen or Cancel Trip on the active trip screen, then confirm if prompted. For an upcoming booking, open Bookings and use its cancellation action. The server must confirm cancellation. Paid or finished trips cannot be cancelled; report a payment issue instead.",
+      "aliases": [
+        "Cancel my ride",
+        "Paano mag cancel ng biyahe?",
+        "Unsaon pag cancel sa byahe?"
+      ],
+      "keywords": [
+        "cancel",
+        "cancellation",
+        "cancelled ride",
+        "canceled ride"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_waiting_screen.dart",
+          "locator": "_cancelRide"
+        },
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_cancelTrip"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "Paid or finished trips cannot be cancelled"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_consumer",
+          "topic": "Cancelling a booking",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "fares",
+      "category": "fares",
+      "question": "How do fares work?",
+      "answer": "Review the fare shown before confirming. TodaGo uses the configured fuel-price fare band, route distance, passenger fare category, service type, and passenger count. Extra distance and any entered additional charges can change the total. The booking screen shows the current estimate; this FAQ cannot quote a live fare.",
+      "aliases": [
+        "How much is the fare?",
+        "Magkano ang pamasahe?",
+        "Pila ang plete?"
+      ],
+      "keywords": [
+        "fare",
+        "fares",
+        "price",
+        "pricing",
+        "cost",
+        "pamasahe",
+        "plete",
+        "fuel price"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/fare_settings_service.dart",
+          "locator": "fareForDistanceKm"
+        },
+        {
+          "path": "todago_backend/src/routes/fares.js",
+          "locator": "readFareSettings"
+        },
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_otherFeeAmount"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_passenger",
+          "topic": "Understanding the displayed price",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "payment_methods",
+      "category": "payments",
+      "question": "How can I pay for my trip?",
+      "answer": "The active trip screen offers Cash and TodaGo Wallet. Some booking screens also offer GCash or Maya checkout; use the options actually shown for your trip. With Cash, pay the driver at drop-off. With TodaGo Wallet, keep enough confirmed balance and follow the trip payment action. GCash or Maya can also fund your wallet through QR Ph. A wallet top-up is separate from paying the trip; wait for payment confirmation.",
+      "aliases": [
+        "Can I pay with GCash or Maya?",
+        "What payment methods are available?",
+        "Paano magbayad?",
+        "Unsaon pagbayad?"
+      ],
+      "keywords": [
+        "pay",
+        "payment",
+        "payments",
+        "cash",
+        "gcash",
+        "maya",
+        "magbayad",
+        "pagbayad",
+        "bayad"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_paymentOptions"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        },
+        {
+          "path": "todago_flutter/lib/driver_selection_screen.dart",
+          "locator": "_paymentOptions"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_consumer",
+          "topic": "Selecting an available payment method",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "wallet_top_up",
+      "category": "wallet",
+      "question": "How do I top up my TodaGo Wallet?",
+      "answer": "Open Wallet and tap Top Up. Follow the method offered by your server. In the passenger QR flow, open or download your assigned QR and scan it with a supported QR Ph wallet such as GCash or Maya. Enter and confirm the amount in that payment app, then return to TodaGo. Your balance changes only after the server confirms the payment; tapping Done does not add money.",
+      "aliases": [
+        "How do I add money?",
+        "Paano mag cash in?",
+        "Unsaon pag top up?"
+      ],
+      "keywords": [
+        "top up",
+        "topup",
+        "top ups",
+        "cash in",
+        "add money",
+        "load wallet",
+        "fund wallet",
+        "scan qr",
+        "qr ph",
+        "qrph"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_scan",
+          "topic": "Scanning and approving a merchant QR payment",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "missing_top_up",
+      "category": "wallet",
+      "question": "Why has my top-up not appeared?",
+      "answer": "Return to TodaGo, check your connection, and refresh Wallet. A payment must be confirmed by the server before it is credited. A receipt, screenshot, or Done button alone does not confirm credit. If the payment app shows success but TodaGo still has no credit, report the issue with the payment reference, amount, and time. Check the existing payment before sending money again. This chatbot cannot inspect your balance or confirm a payment.",
+      "aliases": [
+        "My top up is missing",
+        "Top up not received",
+        "Top up pending",
+        "Hindi pumasok ang cash in",
+        "Wala nisulod ang top up"
+      ],
+      "keywords": [
+        "missing top up",
+        "top up not",
+        "topup not",
+        "top up pending",
+        "top up missing",
+        "top up failed",
+        "top up delayed",
+        "balance not updated",
+        "hindi pumasok",
+        "wala nisulod",
+        "money missing",
+        "top up is not",
+        "topup is not",
+        "top up has not",
+        "top up did not",
+        "top up never",
+        "top up didnt",
+        "payment not received",
+        "paid but balance"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Only a signed live, paid, unrefunded and undisputed PHP payment can credit"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "_load"
+        },
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_missing",
+          "topic": "A debit appears but the merchant has no confirmed payment",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "topup",
+          "top up",
+          "cash in"
+        ],
+        [
+          "missing",
+          "not received",
+          "not appeared",
+          "not credited",
+          "pending",
+          "not updated",
+          "not showing",
+          "not arrived",
+          "failed",
+          "delayed"
+        ]
+      ]
+    },
+    {
+      "id": "track_driver",
+      "category": "booking",
+      "question": "Where is my driver?",
+      "answer": "Open the accepted booking and tap Track to view the live trip map. The driver's position depends on their phone sending GPS updates and both devices having a connection. If the marker stops updating, refresh and use the trip's call or message action. This FAQ cannot see your driver's current position.",
+      "aliases": [
+        "How do I track my ride?",
+        "Nasaan ang driver ko?",
+        "Asa na akong driver?"
+      ],
+      "keywords": [
+        "track",
+        "tracking",
+        "where is my driver",
+        "driver location",
+        "driver position",
+        "marker",
+        "nasaan",
+        "asa na akong driver"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "LiveTripTrackingScreen"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Track"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Driver marker is not updating",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "schedule_ride",
+      "category": "booking",
+      "question": "How do I schedule a reservation?",
+      "answer": "Choose your destination, then switch from Ride Now to Schedule on the service screen. Pick a date and a pickup time more than five minutes ahead, review the details, and tap Reserve Ride to continue choosing a driver. You can review the reservation in Bookings. A reservation still depends on driver acceptance and availability.",
+      "aliases": [
+        "Can I book a ride for later?",
+        "Paano mag schedule ng ride?",
+        "Magpa reserve ug ride"
+      ],
+      "keywords": [
+        "schedule",
+        "scheduled",
+        "reservation",
+        "reserve",
+        "for later",
+        "advance booking"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_pickSchedule"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "scheduledDate.getTime()"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_advance",
+          "topic": "Creating a future reservation",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "service_types",
+      "category": "booking",
+      "question": "What service types can I choose?",
+      "answer": "The service screen lists Solo for one passenger, Shared for a group with drop-off details, Toda-Express with a configured premium, and Pick-up for items. Review the displayed capacity, fare, and details before choosing. Driver availability can vary by service.",
+      "aliases": [
+        "What is Solo Shared or Toda Express?",
+        "What is the pick up service?"
+      ],
+      "keywords": [
+        "service type",
+        "services",
+        "solo",
+        "shared",
+        "toda express",
+        "express",
+        "pick up service",
+        "pickup service",
+        "send an item",
+        "items only"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_services"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_consumer",
+          "topic": "Choosing passenger or item services",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "discounted_fares",
+      "category": "fares",
+      "question": "How do I choose a discounted fare category?",
+      "answer": "Choose the applicable passenger fare category on the service screen before confirming. The app lists Regular, PWD, Student, Senior, and Pregnant, and calculates the selected category using its configured fare bands. Check the booking total and select the category that applies to you.",
+      "aliases": [
+        "Is there a student discount?",
+        "May discount ba ang senior?"
+      ],
+      "keywords": [
+        "discount",
+        "discounted",
+        "student",
+        "senior",
+        "pwd",
+        "pregnant",
+        "fare category",
+        "fare type",
+        "student fare",
+        "senior fare",
+        "pwd fare",
+        "pregnant fare"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_fareTypeLabels"
+        },
+        {
+          "path": "todago_flutter/lib/fare_settings_service.dart",
+          "locator": "discountedFare"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Selecting an eligible fare discount",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "additional_charges",
+      "category": "fares",
+      "question": "Why are there additional charges?",
+      "answer": "The service screen supports labeled additional charges, including item-related fees, as part of the confirmed total. Review the label and amount before booking. If a charge or baggage fee is disputed, use Report an Issue and select the correct trip so the report identifies the participants.",
+      "aliases": [
+        "Why is there an extra fee?",
+        "May dagdag bayad sa bagahe?"
+      ],
+      "keywords": [
+        "additional charge",
+        "additional charges",
+        "extra fee",
+        "extra charge",
+        "baggage",
+        "bagahe",
+        "heavy item",
+        "dagdag bayad"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_otherFeeLabel"
+        },
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "fare_or_baggage_fee"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_fare",
+          "topic": "Reviewing differences in the fare breakdown",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "passenger_history",
+      "category": "booking",
+      "question": "Where can I see my past trips?",
+      "answer": "Open Bookings and choose Past to see completed and cancelled trips. Pull down to refresh if a recent trip has not appeared. Upcoming and active bookings are shown separately. This FAQ explains where to look; it cannot read your personal trip history.",
+      "aliases": [
+        "Where is my trip history?",
+        "Saan makikita ang mga nakaraang biyahe?"
+      ],
+      "keywords": [
+        "past",
+        "history",
+        "previous trips",
+        "completed trips",
+        "cancelled trips",
+        "nakaraang biyahe",
+        "past trips",
+        "trip history"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "_buildBookingsTab"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_passenger",
+          "topic": "Finding a historical transaction",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "rate_driver",
+      "category": "feedback",
+      "question": "How do I rate my driver?",
+      "answer": "After a completed, paid trip, choose 1 to 5 stars, optionally add feedback, and submit. If you skipped feedback, open Bookings > Past and select the completed trip's rating action. Each passenger can submit one rating per trip. Reporting an issue remains available after rating.",
+      "aliases": [
+        "How do I leave driver feedback?",
+        "Paano i rate ang driver?"
+      ],
+      "keywords": [
+        "rate",
+        "rating",
+        "stars",
+        "feedback",
+        "review",
+        "rate driver"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/rate_driver_screen.dart",
+          "locator": "RateDriverScreen"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "Feedback after payment"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_rating",
+          "topic": "Post-trip stars and feedback",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "profile_photo",
+      "category": "account",
+      "question": "How do I upload a profile picture?",
+      "answer": "Open Profile and tap your avatar or Upload Photo, then choose a gallery image. TodaGo saves a local copy and attempts to sync it to your account. Check your connection if syncing fails. A successfully synced photo can be restored from your account when you sign in again.",
+      "aliases": [
+        "How do I change my avatar?",
+        "Paano palitan ang profile picture?"
+      ],
+      "keywords": [
+        "profile picture",
+        "profile photo",
+        "upload photo",
+        "upload a photo",
+        "avatar",
+        "change photo",
+        "upload a profile picture"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/profile_photo_service.dart",
+          "locator": "pickAndSavePhoto"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "_pickPassengerPhoto"
+        },
+        {
+          "path": "todago_flutter/lib/driver_profile_screen.dart",
+          "locator": "Upload Profile Picture"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_photo",
+          "topic": "Adding an account picture",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "trip_messages",
+      "category": "trip",
+      "question": "How do I call or message the other person on my trip?",
+      "answer": "Use the call or message button on the active trip screen. Calling needs a valid phone number and a phone app. Trip messages are limited to the assigned passenger and driver; new messages are available on accepted, pickup, ongoing, or arrived trips. Finished conversations can still be viewed in message history.",
+      "aliases": [
+        "How do I contact my driver?",
+        "How do I contact my passenger?",
+        "Paano i message ang driver?"
+      ],
+      "keywords": [
+        "call",
+        "message",
+        "messages",
+        "chat",
+        "contact driver",
+        "contact passenger",
+        "contact my driver",
+        "phone number"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/contact_service.dart",
+          "locator": "call"
+        },
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_messageDriver"
+        },
+        {
+          "path": "todago_backend/src/routes/tripMessages.js",
+          "locator": "OPEN_STATUSES"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_contact",
+          "topic": "Calling or messaging the assigned participant",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_online",
+      "category": "driver",
+      "question": "How do I go online as a driver?",
+      "answer": "On your driver dashboard, tap GO ONLINE and wait for the server to confirm the status. TodaGo then checks for requests and sends location updates. Use the same control to go offline when available. A suspended account cannot go online; read the restriction message if the action is blocked.",
+      "aliases": [
+        "How do I go offline?",
+        "Paano mag online bilang driver?",
+        "Unsaon pag online?"
+      ],
+      "keywords": [
+        "online",
+        "offline",
+        "availability",
+        "go online",
+        "go offline"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_dashboard_screen.dart",
+          "locator": "_toggleOnline"
+        },
+        {
+          "path": "todago_backend/src/services/reportPenalties.js",
+          "locator": "getRideRestriction"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver",
+          "topic": "Starting availability for new requests",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "accept_request",
+      "category": "driver",
+      "question": "How do I accept a ride request?",
+      "answer": "When a request appears, review the pickup, destination, service, fare, and any notes. Tap ACCEPT if you can take the ride, or DECLINE if you cannot. Wait for confirmation before heading to pickup. An unavailable or restricted driver cannot accept a new request.",
+      "aliases": [
+        "How do I decline a request?",
+        "Paano tumanggap ng booking?"
+      ],
+      "keywords": [
+        "accept",
+        "decline",
+        "incoming request",
+        "request popup",
+        "tumanggap"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/ride_request_screen.dart",
+          "locator": "ACCEPT"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "getRideRestriction"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver",
+          "topic": "Accepting a trip offer",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "no_requests",
+      "category": "driver",
+      "question": "Why am I not receiving ride requests?",
+      "answer": "Check that the dashboard confirms you are online, your connection and location access work, and you have no active restriction. Requests depend on passenger demand and matching availability. Check the dashboard's alerts for service-area issues. Going online does not guarantee a request.",
+      "aliases": [
+        "No ride requests",
+        "Walang pumapasok na booking",
+        "Walay booking"
+      ],
+      "keywords": [
+        "no requests",
+        "no ride requests",
+        "not receiving",
+        "not getting requests",
+        "walang pumapasok",
+        "walay booking"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_dashboard_screen.dart",
+          "locator": "_startPolling"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "getRideRestriction"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_no_requests",
+          "topic": "Troubleshooting missing driver requests",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_pickup",
+      "category": "trip",
+      "question": "What do I do when I reach the pickup point?",
+      "answer": "Follow the pickup navigation screen, mark arrival when you reach the pickup point, then confirm boarding before starting the ride. Use the call or message action if you cannot find the passenger. The pickup screen provides a no-show cancellation action after arrival and before boarding, subject to the server's checks.",
+      "aliases": [
+        "The passenger did not show up",
+        "How do I start a trip?",
+        "Passenger no show"
+      ],
+      "keywords": [
+        "pickup point",
+        "pick up point",
+        "boarding",
+        "start trip",
+        "start a trip",
+        "no show",
+        "passenger absent",
+        "cancel"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/navigation_pickup_screen.dart",
+          "locator": "passenger_no_show"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "No-show cancellation is only available"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver_guide",
+          "topic": "Navigating to the passenger and beginning a ride",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "complete_trip",
+      "category": "trip",
+      "question": "How do I complete a trip?",
+      "answer": "At the destination, tap Arrived at Destination. Settle Cash or wait for confirmed TodaGo online payment, then tap Collect Payment. The server completes the ride and records earnings only after its payment checks pass. For a Shared trip, finish dropping off all remaining passengers first.",
+      "aliases": [
+        "How do I finish a ride?",
+        "Paano tapusin ang biyahe?",
+        "Unsaon paghuman sa byahe?"
+      ],
+      "keywords": [
+        "complete",
+        "finish",
+        "end trip",
+        "end a trip",
+        "collect payment",
+        "arrived at destination",
+        "tapusin",
+        "paghuman"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/active_trip_driver_screen.dart",
+          "locator": "Collect Payment"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver_guide",
+          "topic": "Finishing a ride and reviewing earnings",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_earnings",
+      "category": "wallet",
+      "question": "How do driver earnings work?",
+      "answer": "Completed, paid rides appear in your trip earnings. Confirmed cashless payments are credited to the driver wallet after trip completion. Cash fares are already collected directly from the passenger and do not add withdrawable wallet money. Available balance excludes money reserved for pending or processing cash-outs and money already paid out.",
+      "aliases": [
+        "Where is my driver income?",
+        "Paano makikita ang kita ko?"
+      ],
+      "keywords": [
+        "earnings",
+        "income",
+        "kita",
+        "driver balance",
+        "cashless earnings",
+        "payout summary"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "syncEarnings"
+        },
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "balance"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver_guide",
+          "topic": "Viewing income after each ride",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_cash_out",
+      "category": "wallet",
+      "question": "How do I request a driver cash-out?",
+      "answer": "Open the driver wallet and use Request cash-out. Enter an amount within your available balance and the GCash or Maya account details, then review and submit. Cash-outs require live payment mode and staff processing. You can have one pending or processing request at a time. Only pending requests can be cancelled; follow the limits and status shown in Wallet.",
+      "aliases": [
+        "How do I withdraw my earnings?",
+        "Paano mag cash out?",
+        "Unsaon pag withdraw?"
+      ],
+      "keywords": [
+        "cash out",
+        "cashout",
+        "withdraw",
+        "withdrawal",
+        "payout",
+        "withdraw my earnings",
+        "withdraw earnings"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_wallet_screen.dart",
+          "locator": "Request cash-out"
+        },
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "requestCashOut"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_cashout",
+          "topic": "Requesting a payout of available earnings",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "rate_passenger",
+      "category": "feedback",
+      "question": "How do I rate a passenger?",
+      "answer": "After a completed, paid trip, use the passenger feedback screen to choose 1 to 5 stars and submit. You can also open the completed ride from Past Trips. Each driver can submit one passenger rating per trip. Use Report Passenger for an incident; a rating alone is separate from a report.",
+      "aliases": [
+        "Can a driver rate the passenger?",
+        "Paano i rate ang pasahero?"
+      ],
+      "keywords": [
+        "rate passenger",
+        "rate a passenger",
+        "passenger rating",
+        "passenger feedback",
+        "rate ang pasahero"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/rate_passenger_screen.dart",
+          "locator": "RatePassengerScreen"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "Feedback after payment"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_rating",
+          "topic": "Participant feedback after a ride",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_history",
+      "category": "driver",
+      "question": "Where can a driver see past trips?",
+      "answer": "Open Past Trips from the driver dashboard to review your ride history and available feedback actions for completed rides. Refresh if the latest trip is missing. The FAQ does not retrieve your personal trip records.",
+      "aliases": [
+        "Where is my trip history?",
+        "Where are my completed rides?"
+      ],
+      "keywords": [
+        "past",
+        "history",
+        "completed rides",
+        "previous trips",
+        "past trips",
+        "trip history"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_trip_history_screen.dart",
+          "locator": "DriverTripHistoryScreen"
+        },
+        {
+          "path": "todago_flutter/lib/driver_dashboard_screen.dart",
+          "locator": "Past Trips"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver_guide",
+          "topic": "Reviewing driver activity and earnings",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_rating",
+      "category": "feedback",
+      "question": "Where does my driver rating come from?",
+      "answer": "Your driver rating comes from passenger feedback on completed, paid rides. Passenger-to-driver ratings update the driver's average; driver-to-passenger ratings are stored separately. A rating and an incident report are different records. This FAQ cannot inspect or change your rating. The Driver Growth section suggests keeping pickup ETA accurate, confirming the passenger name, and asking politely for a rating.",
+      "aliases": [
+        "How can I improve my driver rating?",
+        "Why is my driver rating low?"
+      ],
+      "keywords": [
+        "driver rating",
+        "my rating",
+        "rating",
+        "stars",
+        "feedback",
+        "review"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "Feedback after payment"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "rating_score"
+        },
+        {
+          "path": "todago_flutter/lib/driver_profile_screen.dart",
+          "locator": "Driver Growth"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_rating",
+          "topic": "Understanding post-trip feedback",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "report_issue",
+      "category": "support",
+      "question": "How do I report a trip problem?",
+      "answer": "Use Report an Issue or Report Driver/Passenger from the trip, feedback, or report controls. Choose the incident type, select the correct trip when required, describe what happened, and submit. The trip links the report to the right people for admin review. Submitting a report does not immediately impose a restriction. This chatbot cannot submit or resolve reports for you.",
+      "aliases": [
+        "I need help with a driver problem",
+        "Paano mag report?",
+        "Unsaon pag report?"
+      ],
+      "keywords": [
+        "report",
+        "complaint",
+        "support",
+        "driver problem",
+        "passenger problem",
+        "lost item",
+        "wrong driver"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_support",
+          "topic": "Selecting the relevant ride when requesting help",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "account_restriction",
+      "category": "account",
+      "question": "Why is my account restricted from new rides?",
+      "answer": "A validated incident report can apply a passenger booking cooldown or a driver suspension. Read the restriction message for its duration or permanent status. Restricted passengers cannot create new bookings; suspended drivers cannot go online or accept new requests. Already accepted rides can still be finished or cancelled as permitted. This chatbot cannot remove a restriction.",
+      "aliases": [
+        "Why am I suspended?",
+        "Bakit restricted ang account ko?",
+        "Account blocked"
+      ],
+      "keywords": [
+        "restricted",
+        "restriction",
+        "suspended",
+        "suspension",
+        "cooldown",
+        "blocked",
+        "blacklist",
+        "banned"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "Passenger cooldowns block both instant and scheduled new bookings"
+        },
+        {
+          "path": "todago_backend/src/services/reportPenalties.js",
+          "locator": "restriction"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_unavailable",
+          "topic": "Account conditions preventing new bookings",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "location_access",
+      "category": "technical",
+      "question": "Why does TodaGo need location access?",
+      "answer": "TodaGo uses your location for pickup selection, routes, and live trip tracking. Enable your phone's location service and allow TodaGo's location permission in system settings. Check your connection and retry if your position is unavailable. Driver tracking and alerts depend on the location updates actually received; the FAQ does not read your GPS position.",
+      "aliases": [
+        "My GPS is not working",
+        "How do I enable location permission?",
+        "Hindi gumagana ang GPS"
+      ],
+      "keywords": [
+        "gps",
+        "location access",
+        "location permission",
+        "enable location",
+        "my location",
+        "location not working",
+        "location unavailable",
+        "my gps"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/map_service.dart",
+          "locator": "getCurrentLocation"
+        },
+        {
+          "path": "todago_flutter/lib/location_service.dart",
+          "locator": "LocationService"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "google_location",
+          "topic": "Controlling app-specific location access",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "connection_issues",
+      "category": "technical",
+      "question": "What should I do if the app is not working?",
+      "answer": "Check your internet connection, refresh the affected screen, and try again after reading any error message. Signing in, booking, live maps, tracking, messages, and payment confirmation require their connected services. The bundled FAQ answers remain available without an internet request. If an action may already have succeeded, check its status before submitting it again.",
+      "aliases": [
+        "Does TodaGo need internet?",
+        "What should I do if something goes wrong?",
+        "Ayaw gumana ang app",
+        "Hindi gumagana ang app"
+      ],
+      "keywords": [
+        "internet",
+        "connection",
+        "network",
+        "app not working",
+        "app error",
+        "error",
+        "something goes wrong",
+        "ayaw gumana",
+        "hindi gumagana ang app"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/trip_service.dart",
+          "locator": "TripService"
+        },
+        {
+          "path": "todago_flutter/lib/map_service.dart",
+          "locator": "MapService"
+        },
+        {
+          "path": "todago_flutter/lib/ai_chat_screen.dart",
+          "locator": "FaqService"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Connection failures and retrying the app",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "directions",
+      "category": "directions",
+      "question": "Can the chatbot show directions?",
+      "answer": "Ask for directions with a place name, such as 'directions to Gaisano Mall'. Allow location access so the app can find road routes from your position. Use View routes on map to compare them. Place lookup, routes, and travel estimates come from the map service separately from the FAQ dataset; an available route does not guarantee a TodaGo driver.",
+      "aliases": [
+        "How do I get directions?",
+        "Can I search for a place?"
+      ],
+      "keywords": [
+        "directions",
+        "route options",
+        "place search",
+        "search for a place"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/ai_chat_screen.dart",
+          "locator": "_routeReply"
+        },
+        {
+          "path": "todago_flutter/lib/map_service.dart",
+          "locator": "searchPlaces"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver_guide",
+          "topic": "Using navigation to the destination",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "service_area",
+      "category": "trip",
+      "question": "Where is TodaGo's configured service area?",
+      "answer": "The project's bundled service-area boundaries cover Panabo and Carmen. The server can override those configured areas. Drivers receive an alert when their reported position is outside the configured area. A map search can return places elsewhere, so finding a route alone does not confirm ride availability there.",
+      "aliases": [
+        "What areas does TodaGo cover?",
+        "Why am I outside the service area?"
+      ],
+      "keywords": [
+        "service area",
+        "service areas",
+        "coverage",
+        "outside service",
+        "areas does todago cover"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/utils/serviceAreas.js",
+          "locator": "classifyServiceArea"
+        },
+        {
+          "path": "todago_backend/src/data/panabo-carmen-boundaries.md",
+          "locator": "Panabo"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_unavailable",
+          "topic": "Ride availability depends on location",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "voice_input",
+      "category": "technical",
+      "question": "How do I use voice input in the chatbot?",
+      "answer": "Tap the microphone, allow microphone or speech access when requested, and say your question. Tap again to stop, or wait for listening to finish. Speech availability depends on your phone and permissions. If the microphone is unavailable, type the question instead.",
+      "aliases": [
+        "Why is the microphone unavailable?",
+        "Can I speak my question?"
+      ],
+      "keywords": [
+        "microphone",
+        "mic",
+        "voice",
+        "speech",
+        "speak",
+        "listening"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/ai_chat_screen.dart",
+          "locator": "_toggleMic"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "google_permissions",
+          "topic": "Allowing microphone access",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "faq_sources",
+      "category": "about",
+      "question": "Where do the FAQ answers come from?",
+      "answer": "This 100-entry FAQ set adapts question topics from public Angkas, Grab, and Uber help collections, plus BSP, GCash, PayMongo, and Google guidance. Answers are rewritten for TodaGo and checked against its implemented screens and backend rules. Tap Sources below an answer to open its references. External providers' policies do not automatically apply to TodaGo. The dataset and APA reference list record the origin and review date. This chatbot cannot inspect your private account or confirm a payment.",
+      "aliases": [
+        "What is the source of this dataset?",
+        "Where is FAQ data from?",
+        "Saan galing ang data?",
+        "Asa gikan ang data?"
+      ],
+      "keywords": [
+        "source",
+        "sources",
+        "dataset",
+        "faq data",
+        "data come from",
+        "data from",
+        "answers come from",
+        "training data",
+        "galing ang data",
+        "gikan ang data"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/data/faqs.json",
+          "locator": "provenance"
+        },
+        {
+          "path": "todago_backend/src/services/faq.js",
+          "locator": "matchFaq"
+        },
+        {
+          "path": "todago_flutter/lib/faq_service.dart",
+          "locator": "FaqService"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "datasheets_paper",
+          "topic": "Documenting dataset origin and intended use",
+          "usage": "methodology"
+        },
+        {
+          "sourceId": "mfaq_paper",
+          "topic": "Related literature on FAQ corpora",
+          "usage": "methodology"
+        }
+      ]
+    },
+    {
+      "id": "pickup_pin",
+      "category": "booking",
+      "question": "How do I correct my pickup pin before booking?",
+      "answer": "Review the pickup point on the map before confirming. Move the map pin or select the correct location when the picker allows it, and check the displayed address. Add a landmark in the driver note if needed. Do not confirm a request with a pickup point you know is wrong.",
+      "aliases": [
+        "My pickup pin is wrong"
+      ],
+      "keywords": [
+        "pickup pin",
+        "wrong pickup",
+        "correct pickup",
+        "pickup address"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "_openDestinationPicker"
+        },
+        {
+          "path": "todago_flutter/lib/live_map_screen.dart",
+          "locator": "LiveMapScreen"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_pickup",
+          "topic": "Correcting a suggested pickup point",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "destination_search",
+      "category": "booking",
+      "question": "What if my destination does not appear in search?",
+      "answer": "Enter a more specific place name or address and check the results on the map. If search cannot resolve it, use a map pin where the picker supports it and verify the destination before proceeding. A failed search is not proof that a driver can serve the location.",
+      "aliases": [
+        "I cannot find my destination"
+      ],
+      "keywords": [
+        "destination not found",
+        "destination does not appear",
+        "search no results",
+        "cannot find destination"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/destination_picker_screen.dart",
+          "locator": "DestinationPickerScreen"
+        },
+        {
+          "path": "todago_flutter/lib/map_service.dart",
+          "locator": "searchPlaces"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_pickup",
+          "topic": "Choosing a recognizable address or map point",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "destination",
+          "place",
+          "address",
+          "search"
+        ],
+        [
+          "not found",
+          "no results",
+          "cannot find",
+          "cant find",
+          "missing",
+          "does not appear"
+        ]
+      ]
+    },
+    {
+      "id": "compare_routes",
+      "category": "directions",
+      "question": "How do I compare the available routes?",
+      "answer": "After selecting a destination, review the route options on the map. Compare their displayed distance, estimated time, and road summary, then select a suitable route before booking. If the service returns only one route, the app can only show that option.",
+      "aliases": [
+        "Can I compare route options?"
+      ],
+      "keywords": [
+        "compare routes",
+        "available routes",
+        "alternative routes",
+        "route comparison"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_map_screen.dart",
+          "locator": "LiveMapScreen"
+        },
+        {
+          "path": "todago_flutter/lib/map_service.dart",
+          "locator": "fetchRoutes"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver_guide",
+          "topic": "Navigation choices before travel",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "route_eta",
+      "category": "directions",
+      "question": "Is the displayed arrival time guaranteed?",
+      "answer": "The displayed minutes are an estimate from the available route and location information. Traffic, stops, GPS updates, and driver movement can change actual travel time. Check the active trip screen for updates; the FAQ cannot promise an exact pickup or arrival time.",
+      "aliases": [
+        "Can I rely on the exact ETA?"
+      ],
+      "keywords": [
+        "arrival time guaranteed",
+        "eta guaranteed",
+        "estimated arrival",
+        "eta changes",
+        "travel time estimate"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/map_service.dart",
+          "locator": "etaMinutes"
+        },
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "LiveTripTrackingScreen"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_advance",
+          "topic": "Arrival updates and delayed pickup",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "wrong_destination_prebook",
+      "category": "booking",
+      "question": "Can I correct the destination before sending a request?",
+      "answer": "Go back to the destination picker, choose the correct place, and review the new route and fare before confirming. Changing an input before booking is different from editing an already accepted trip. Check the active trip controls if a request has already been sent.",
+      "aliases": [
+        "I selected the wrong destination before booking"
+      ],
+      "keywords": [
+        "correct destination",
+        "wrong destination",
+        "change destination before",
+        "edit destination before"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/destination_picker_screen.dart",
+          "locator": "DestinationPickerScreen"
+        },
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "destinationName"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_pickup",
+          "topic": "Correcting location details before confirmation",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "no_drivers_passenger",
+      "category": "booking",
+      "question": "What should I do when no drivers are available?",
+      "answer": "Check your connection and pickup details, refresh the driver list, and try again later if it is empty. Availability depends on participating drivers and matching conditions. Searching a map route does not reserve a driver or guarantee a ride.",
+      "aliases": [
+        "There are no available drivers"
+      ],
+      "keywords": [
+        "no drivers",
+        "no driver available",
+        "drivers unavailable",
+        "driver list empty",
+        "walang driver"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "No drivers online right now"
+        },
+        {
+          "path": "todago_flutter/lib/driver_selection_screen.dart",
+          "locator": "DriverSelectionScreen"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_unavailable",
+          "topic": "No matching drivers are available",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_details",
+      "category": "booking",
+      "question": "How do I check the assigned driver and vehicle?",
+      "answer": "Review the driver and vehicle details shown in the booking or tracking screen before boarding. Check that the arriving vehicle matches the displayed information. Use the trip contact controls if anything is unclear, and report a mismatch against the correct trip.",
+      "aliases": [
+        "Where can I see the vehicle information?"
+      ],
+      "keywords": [
+        "assigned driver details",
+        "vehicle details",
+        "check plate",
+        "driver identity",
+        "verify vehicle"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "LiveTripTrackingScreen"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Track"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_passenger",
+          "topic": "Reviewing the assigned biker and booking details",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "booking_status",
+      "category": "booking",
+      "question": "What do requested, accepted, ongoing, and completed mean?",
+      "answer": "Requested means the booking is awaiting a driver response. Accepted means a driver has taken it; pickup and ongoing describe the pickup and travel stages. Arrived marks the destination/payment stage. Completed means the trip completion checks passed. Read the status on the booking itself for your current state.",
+      "aliases": [
+        "What does my booking status mean?"
+      ],
+      "keywords": [
+        "booking status",
+        "trip statuses",
+        "requested accepted",
+        "status meanings"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "arrived"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "_statusLabel"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_passenger",
+          "topic": "Following booking progress",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "scheduled_status",
+      "category": "booking",
+      "question": "Does a reservation mean a driver has already accepted?",
+      "answer": "A saved scheduled booking and an accepted ride are different states. Open Bookings and check the reservation status. Do not assume a driver has accepted until the app confirms acceptance; pickup remains dependent on a driver being available.",
+      "aliases": [
+        "My reservation is saved but not accepted"
+      ],
+      "keywords": [
+        "reservation accepted",
+        "reserved driver",
+        "scheduled status",
+        "reservation confirmation",
+        "driver not assigned"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_pickSchedule"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "scheduledDate.getTime()"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_advance",
+          "topic": "Distinguishing a reservation from driver acceptance",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "schedule_edit",
+      "category": "booking",
+      "question": "How do I change the time of an existing reservation?",
+      "answer": "Review the reservation in Bookings. The current TodaGo flow does not provide a general reschedule editor. If its cancellation action is available, cancel and wait for confirmation before creating a replacement with the correct pickup time. Do not create a second booking while unsure about the first.",
+      "aliases": [
+        "Can I reschedule my booking?"
+      ],
+      "keywords": [
+        "reschedule",
+        "change reservation time",
+        "edit reservation",
+        "change scheduled time"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_pickSchedule"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "scheduledDate.getTime()"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_advance",
+          "topic": "Changing a previously scheduled booking",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "reserve_window",
+      "category": "booking",
+      "question": "Why is my selected reservation time rejected?",
+      "answer": "Choose a pickup time more than five minutes ahead of the current time. Selecting a past time or a time too close to now is rejected by the server. If submission took a while, choose a later time and review the details again.",
+      "aliases": [
+        "Why can I not reserve a ride for right now?"
+      ],
+      "keywords": [
+        "reservation time rejected",
+        "past pickup time",
+        "five minutes",
+        "schedule too soon",
+        "pickup time invalid"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_pickSchedule"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "scheduledDate.getTime()"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_advance",
+          "topic": "Choosing a valid future pickup time",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "booking_notes",
+      "category": "booking",
+      "question": "How do I add a landmark or instructions for the driver?",
+      "answer": "Use the driver note field on the service screen before confirming. Give a short, useful pickup landmark or item instruction and review it with your booking details. Keep the map pin accurate; a note does not change the booked coordinates.",
+      "aliases": [
+        "Where can I write a note to the driver?"
+      ],
+      "keywords": [
+        "driver note",
+        "booking note",
+        "landmark",
+        "pickup instructions",
+        "instructions for driver"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_driverNoteController"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "booking_notes"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Providing pickup or delivery instructions",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "shared_capacity",
+      "category": "booking",
+      "question": "How many passengers can I enter for a Shared booking?",
+      "answer": "The current Shared booking form accepts a group count from two to six. Enter the actual count and review the available vehicle and driver before confirming. This form limit does not establish that every vehicle can safely carry that group; use a suitable participating vehicle.",
+      "aliases": [
+        "What is the passenger limit for Shared?"
+      ],
+      "keywords": [
+        "shared capacity",
+        "shared passenger count",
+        "how many passengers",
+        "group size",
+        "shared seats"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_sharedPassengerCount"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "passenger_count"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_group",
+          "topic": "Checking group size against the selected ride",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "shared_stops",
+      "category": "booking",
+      "question": "How do I enter different drop-offs for a Shared ride?",
+      "answer": "Choose Shared and enter the passenger count, then fill the drop-off details offered by the form. Check each destination and its position before proceeding. The driver follows the recorded remaining drop-offs, and all passengers must be dropped off before final payment collection completes the group trip.",
+      "aliases": [
+        "Can a Shared ride have several drop-offs?"
+      ],
+      "keywords": [
+        "shared drop offs",
+        "shared stops",
+        "multiple drop offs",
+        "group destinations",
+        "different drop offs"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_dropoffNames"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "shared_dropoffs"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_group",
+          "topic": "Reviewing group stops and route order",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "express_fare",
+      "category": "fares",
+      "question": "Why does Toda-Express cost more than Solo?",
+      "answer": "Toda-Express applies the configured premium multiplier to the applicable individual fare. Review the displayed service comparison and total before selecting it. The label describes the service option; it does not guarantee a specific arrival time.",
+      "aliases": [
+        "How is the Toda-Express premium applied?"
+      ],
+      "keywords": [
+        "express cost",
+        "express premium",
+        "express more expensive",
+        "premium multiplier"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "premiumFare"
+        },
+        {
+          "path": "todago_flutter/lib/fare_settings_service.dart",
+          "locator": "premiumMultiplier"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_passenger",
+          "topic": "Comparing prices across service choices",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "item_details",
+      "category": "booking",
+      "question": "What information is needed for a Pick-up item booking?",
+      "answer": "Select Pick-up, describe the item, and add its weight and driver instructions where requested. Confirm the pickup point, destination, displayed fee, and any additional charges before requesting a driver. The form requires an item description; it does not guarantee acceptance of every item.",
+      "aliases": [
+        "What should I enter when sending an item?"
+      ],
+      "keywords": [
+        "item description",
+        "item weight",
+        "pick up item",
+        "pickup item",
+        "parcel details"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_pickupItemController"
+        },
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_pickupWeightController"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_consumer",
+          "topic": "Booking an item rather than a passenger service",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "heavy_items",
+      "category": "fares",
+      "question": "Can heavy items or baggage add to the booking price?",
+      "answer": "The Pick-up form can include item weight and a labeled additional charge. Check the description and amount in the total before confirming, and clarify unusual items with the driver. TodaGo does not define a universal per-kilogram price in this FAQ.",
+      "aliases": [
+        "Is there a heavy-item surcharge?"
+      ],
+      "keywords": [
+        "heavy baggage",
+        "heavy parcel",
+        "weight surcharge",
+        "heavy items fee",
+        "item surcharge"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_otherFeeLabel"
+        },
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "fare_or_baggage_fee"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_fare",
+          "topic": "Reviewing additional components of a displayed fare",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "fare_distance",
+      "category": "fares",
+      "question": "How does route distance affect the fare?",
+      "answer": "The current fare calculation uses a base fare for the first route segment and an additional charge for extra distance beyond it. The service, fare category, passenger count, and entered extras also affect the total. Use the booking screen for the amount calculated with the current settings.",
+      "aliases": [
+        "Does a longer route change the price?"
+      ],
+      "keywords": [
+        "distance fare",
+        "fare distance",
+        "per kilometer",
+        "extra distance",
+        "longer route cost"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/fare_settings_service.dart",
+          "locator": "fareForDistanceKm"
+        },
+        {
+          "path": "todago_backend/src/routes/fares.js",
+          "locator": "readFareSettings"
+        },
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_otherFeeAmount"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_fare",
+          "topic": "Route distance as a component of the estimated price",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "fare_band_changes",
+      "category": "fares",
+      "question": "Why can the base fare change between bookings?",
+      "answer": "TodaGo loads configured fuel-price fare bands and a premium multiplier. If those settings or your selected fare category change, a later booking can show a different estimate. Review each booking total rather than relying on the price of an earlier ride.",
+      "aliases": [
+        "Why is the base fare different today?"
+      ],
+      "keywords": [
+        "base fare changed",
+        "fuel band",
+        "fuel price change",
+        "different base fare",
+        "fare settings"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/fare_settings_service.dart",
+          "locator": "fareForDistanceKm"
+        },
+        {
+          "path": "todago_backend/src/routes/fares.js",
+          "locator": "readFareSettings"
+        },
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_otherFeeAmount"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_passenger",
+          "topic": "Pricing may differ between otherwise similar bookings",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "shared_fare",
+      "category": "fares",
+      "question": "Is the Shared amount a group total or a per-person price?",
+      "answer": "Review both labels on the service screen. TodaGo calculates the applicable individual fare for the entered passenger count and shows the Shared group total, with a per-person label where available. Entered additional charges are included in the total. It does not automatically split payment between several passenger wallets.",
+      "aliases": [
+        "Does Shared split the payment across wallets?"
+      ],
+      "keywords": [
+        "shared fare total",
+        "shared price per person",
+        "group total",
+        "split fare",
+        "shared amount"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "sharedFare"
+        },
+        {
+          "path": "todago_flutter/lib/fare_settings_service.dart",
+          "locator": "passengerCount"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_group",
+          "topic": "Distinguishing individual amounts from a group payment total",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "shared",
+          "group"
+        ],
+        [
+          "fare",
+          "price",
+          "cost",
+          "split"
+        ]
+      ]
+    },
+    {
+      "id": "fare_breakdown",
+      "category": "fares",
+      "question": "Where should I check the final amount before I book?",
+      "answer": "Review the selected service and fare summary before confirming your request. Check the fare category, passenger count, premium, and any labeled extras. If something is incorrect, change the booking inputs before submitting instead of relying on a remembered estimate.",
+      "aliases": [
+        "Where can I review all booking charges?"
+      ],
+      "keywords": [
+        "fare breakdown",
+        "price breakdown",
+        "check total",
+        "review total",
+        "booking total"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/fare_settings_service.dart",
+          "locator": "fareForDistanceKm"
+        },
+        {
+          "path": "todago_backend/src/routes/fares.js",
+          "locator": "readFareSettings"
+        },
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_otherFeeAmount"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_fare",
+          "topic": "Comparing the estimate with the trip details",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "dispute_fare",
+      "category": "support",
+      "question": "What should I do if I disagree with the fare charged?",
+      "answer": "Compare the trip details and recorded amount with the booking you confirmed. Use Report an Issue, choose the fare-related incident, and select the correct trip. Describe the difference and keep the payment reference if relevant. Reporting starts a review; the chatbot cannot change a charge or approve a refund.",
+      "aliases": [
+        "I think the fare charge is incorrect"
+      ],
+      "keywords": [
+        "dispute fare",
+        "wrong fare",
+        "incorrect fare",
+        "overcharged",
+        "fare dispute"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_otherFeeLabel"
+        },
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "fare_or_baggage_fee"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_fare",
+          "topic": "Requesting a review of a disputed trip amount",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "payment_change",
+      "category": "payments",
+      "question": "Can I change my payment method during an unpaid trip?",
+      "answer": "Open Payment Method on the active trip screen and choose an offered method if the control is available. Wait for the server to confirm the change. A paid or finished trip cannot have its method changed, and an in-progress online checkout may need to be resolved first.",
+      "aliases": [
+        "Can I switch from Cash to TodaGo Wallet?"
+      ],
+      "keywords": [
+        "change payment method",
+        "switch payment",
+        "change to cash",
+        "change to wallet"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_choosePaymentMethod"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "Payment method set to"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_group",
+          "topic": "Whether an existing booking permits a payment-method change",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "pay_when_arrived",
+      "category": "payments",
+      "question": "When does the trip payment action become available?",
+      "answer": "The online payment section is shown when the driver marks arrival at the destination. If you selected TodaGo Wallet, follow the payment action and wait for confirmation. For Cash, settle directly with the driver. The driver then collects or confirms payment to complete the trip.",
+      "aliases": [
+        "Why can I not pay the trip before arrival?"
+      ],
+      "keywords": [
+        "when to pay",
+        "pay at destination",
+        "payment button unavailable",
+        "when can i pay"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_hasArrivedAtDestination"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_consumer",
+          "topic": "Settling a ride using the selected payment option",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "insufficient_balance",
+      "category": "payments",
+      "question": "What if my wallet balance is too low to pay?",
+      "answer": "Check the trip amount against your confirmed wallet balance. Add funds through the offered top-up flow, then retry the trip payment after the credit appears. You can select Cash if the unpaid trip permits a method change. A payment receipt for a pending top-up is not spendable wallet balance.",
+      "aliases": [
+        "I do not have enough wallet funds"
+      ],
+      "keywords": [
+        "insufficient balance",
+        "not enough balance",
+        "wallet too low",
+        "low wallet",
+        "kulang balance"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "wallet"
+        },
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_choosePaymentMethod"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_unavailable",
+          "topic": "A payment condition prevents the requested action",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "payment_pending",
+      "category": "payments",
+      "question": "What should I do while my trip payment is pending?",
+      "answer": "Keep the payment and trip screens available, check your connection, and refresh the status. Confirm the outcome of the existing attempt before starting another payment. Tell the driver it is still pending; an online payment is settled only after the server confirms it.",
+      "aliases": [
+        "The trip payment is still processing"
+      ],
+      "keywords": [
+        "trip payment pending",
+        "payment processing",
+        "payment still pending",
+        "payment not confirmed"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_paymentOptions"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        },
+        {
+          "path": "todago_flutter/lib/driver_selection_screen.dart",
+          "locator": "_paymentOptions"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_missing",
+          "topic": "A payment may still be processing rather than failed",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "payment",
+          "pay"
+        ],
+        [
+          "pending",
+          "processing",
+          "not confirmed",
+          "unconfirmed",
+          "waiting"
+        ]
+      ]
+    },
+    {
+      "id": "duplicate_charge",
+      "category": "payments",
+      "question": "What if I think I was charged twice?",
+      "answer": "Review your provider transaction history and TodaGo trip or wallet history to identify the amounts, times, and references. Do not assume a pending entry is a second completed payment. Report the issue with the correct trip or transaction details. The chatbot cannot determine whether two debits actually settled.",
+      "aliases": [
+        "I may have paid for the same ride twice"
+      ],
+      "keywords": [
+        "charged twice",
+        "double charge",
+        "duplicate charge",
+        "paid twice",
+        "duplicate payment"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_duplicate",
+          "topic": "Investigating a suspected duplicate debit",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "refund_request",
+      "category": "payments",
+      "question": "How can I request help with a refund or wrong payment?",
+      "answer": "Report the payment issue against the correct trip where applicable and keep the provider reference, amount, and transaction time. Follow up with the project operator and the payment provider as appropriate. This chatbot does not issue refunds, and TodaGo has no fixed refund deadline defined in this FAQ.",
+      "aliases": [
+        "Can the chatbot refund my payment?"
+      ],
+      "keywords": [
+        "refund",
+        "wrong payment",
+        "payment reversal",
+        "request money back"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_missing",
+          "topic": "Following up with the merchant and provider about a disputed payment",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "qrph_what",
+      "category": "wallet",
+      "question": "What is QR Ph?",
+      "answer": "QR Ph is the Philippines' interoperable payment QR standard. Its merchant-payment use allows customers of participating financial institutions to scan a merchant QR using a supported app. TodaGo uses an assigned merchant QR in its passenger top-up flow; the app still waits for server-confirmed credit.",
+      "aliases": [
+        "What does QR Ph mean?"
+      ],
+      "keywords": [
+        "what is qr ph",
+        "what is qrph",
+        "qr standard",
+        "qr ph meaning"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "bsp_qrph",
+          "topic": "The national interoperable merchant-payment QR standard",
+          "usage": "general_guidance"
+        }
+      ]
+    },
+    {
+      "id": "qrph_requirements",
+      "category": "wallet",
+      "question": "What do I need to scan a QR Ph payment?",
+      "answer": "You need a supported bank or e-money app, an eligible funded account, and an internet connection. Use the app's QR scan or supported image-import option with the correct merchant QR, then check and approve the payment details. Camera access is needed when scanning with the camera.",
+      "aliases": [
+        "What are the requirements for QR payment?"
+      ],
+      "keywords": [
+        "qr requirements",
+        "qr ph requirements",
+        "requirements to scan",
+        "need to scan qr"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "bsp_qrph",
+          "topic": "Device, participating account, and connectivity requirements",
+          "usage": "general_guidance"
+        }
+      ]
+    },
+    {
+      "id": "qrph_supported_apps",
+      "category": "wallet",
+      "question": "Must I use the same bank as the QR merchant?",
+      "answer": "QR Ph supports payments between participating banks and e-money issuers. Check that your payment app supports the displayed merchant QR. TodaGo commonly presents GCash or Maya guidance, but a provider's current participation and account limits must be checked with that provider.",
+      "aliases": [
+        "Can another participating bank scan QR Ph?"
+      ],
+      "keywords": [
+        "same bank",
+        "supported banks",
+        "qr payment apps",
+        "different bank",
+        "qr interoperability"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "bsp_qrph",
+          "topic": "Payments between participating financial institutions",
+          "usage": "general_guidance"
+        }
+      ]
+    },
+    {
+      "id": "qrph_recipient",
+      "category": "wallet",
+      "question": "What should I check before approving a scanned QR payment?",
+      "answer": "Check the merchant or recipient details displayed by your payment app and the amount you intend to send. Use the QR assigned in your signed-in TodaGo top-up screen. Stop if the details look wrong, and resolve that mismatch before authorizing payment.",
+      "aliases": [
+        "How can I check the QR payment recipient?"
+      ],
+      "keywords": [
+        "check recipient",
+        "wrong merchant",
+        "qr recipient",
+        "recipient details",
+        "before approving qr"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_scan",
+          "topic": "Reviewing payment details before authorization",
+          "usage": "general_guidance"
+        }
+      ]
+    },
+    {
+      "id": "qr_download",
+      "category": "wallet",
+      "question": "How do I download my assigned top-up QR?",
+      "answer": "Open Wallet > Top Up and use the QR download action when your assigned QR is available. Follow the save or gallery instructions shown by the device. The app verifies the expected QR image before using it. Downloading a QR only saves the image; it does not send money.",
+      "aliases": [
+        "Can I save my top-up QR image?"
+      ],
+      "keywords": [
+        "download qr",
+        "save qr",
+        "qr gallery",
+        "qr image download"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_flutter/lib/merchant_qr_checkout_screen.dart",
+          "locator": "MerchantQrCheckoutScreen"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_scan",
+          "topic": "Using a QR image in the payment-app workflow",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "qr_unavailable",
+      "category": "wallet",
+      "question": "Why does the app say my QR is being prepared?",
+      "answer": "The server may not have an unused QR available for assignment yet. Refresh later and check any message on the top-up screen. Do not use another passenger's QR, because it is linked to their wallet. This chatbot cannot allocate a QR or make an unavailable code payable.",
+      "aliases": [
+        "My top-up QR is not available"
+      ],
+      "keywords": [
+        "qr being prepared",
+        "qr unavailable",
+        "no top up qr",
+        "qr not available",
+        "missing qr"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "bsp_qrph",
+          "topic": "A payment service provider supplies a merchant QR",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "qr_reuse",
+      "category": "wallet",
+      "question": "Can I use my assigned QR for more than one top-up?",
+      "answer": "The passenger QR flow permits later confirmed payments to the same assigned QR to credit the same wallet. Each payment must have its own valid provider confirmation. Always use the current QR shown in your account and check the prior payment outcome before sending another top-up.",
+      "aliases": [
+        "Can I top up again using the same QR?"
+      ],
+      "keywords": [
+        "reuse qr",
+        "same qr again",
+        "multiple top ups",
+        "repeat qr payment"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "bsp_qrph",
+          "topic": "A merchant QR identifies the receiving account",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "topup_vs_trip",
+      "category": "wallet",
+      "question": "Does adding money automatically pay my active trip?",
+      "answer": "No. A top-up adds confirmed wallet credit. Paying an active trip is a separate action on the trip screen after arrival. Check both the wallet credit and the trip's payment status; do not treat a top-up receipt as proof that the ride is already paid.",
+      "aliases": [
+        "Why is my trip unpaid after I topped up?"
+      ],
+      "keywords": [
+        "top up pays trip",
+        "topup automatically",
+        "adding money pay trip",
+        "top up versus trip",
+        "wallet funded trip unpaid"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/live_trip_tracking_screen.dart",
+          "locator": "_paymentOptions"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        },
+        {
+          "path": "todago_flutter/lib/driver_selection_screen.dart",
+          "locator": "_paymentOptions"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "paymongo_events",
+          "topic": "Distinguishing one confirmed payment event from another transaction",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "wallet_history",
+      "category": "wallet",
+      "question": "Where can I review wallet transactions?",
+      "answer": "Open Wallet to review the server-provided transaction list. Use the available transaction filters and refresh when needed. Compare the transaction type, amount, and status when investigating a top-up or trip payment. The chatbot cannot retrieve that list for you.",
+      "aliases": [
+        "How do I see previous wallet transactions?"
+      ],
+      "keywords": [
+        "wallet transactions",
+        "wallet history",
+        "transaction history",
+        "top up history"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "_displayedTransactions"
+        },
+        {
+          "path": "todago_flutter/lib/wallet_service.dart",
+          "locator": "getWallet"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_missing",
+          "topic": "Checking transaction history before reporting missing money",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "cash_change",
+      "category": "payments",
+      "question": "What if I need change for a cash payment?",
+      "answer": "Add a short driver note before booking if you expect to pay with a large denomination, and clarify the change needed with the driver. Check the confirmed fare and the change you receive. If there is a fare dispute, report it against the correct trip; the chatbot cannot settle it.",
+      "aliases": [
+        "Can I tell the driver I need change?"
+      ],
+      "keywords": [
+        "cash change",
+        "need change",
+        "large denomination",
+        "large cash bill"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/service_selection_screen.dart",
+          "locator": "_driverNoteController"
+        },
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "fare_or_baggage_fee"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Letting the driver know when change may be needed",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "topup_done",
+      "category": "wallet",
+      "question": "Does tapping Done confirm that money was received?",
+      "answer": "No. Done returns you from the QR flow. The app credits money only when its server confirms a valid payment. Check the updated balance or payment status rather than relying on leaving the QR screen.",
+      "aliases": [
+        "I pressed Done but my balance did not increase"
+      ],
+      "keywords": [
+        "tap done",
+        "tapping done",
+        "done button",
+        "done confirm",
+        "pressed done"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "PassengerQrTopUpScreen"
+        },
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Operation"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_home_screen.dart",
+          "locator": "Top Up"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "paymongo_events",
+          "topic": "A completed provider event confirms payment, not a client navigation action",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "transaction_reference",
+      "category": "payments",
+      "question": "Which payment reference should I keep when reporting an issue?",
+      "answer": "Keep the reference or invoice identifier shown in the payment provider's transaction details, together with the amount, date, and time. Include the TodaGo trip or transaction reference when available. Provide these through the relevant report or support process; the FAQ cannot verify a reference or create credit from it.",
+      "aliases": [
+        "Where do I find the reference for a missing payment?"
+      ],
+      "keywords": [
+        "payment reference",
+        "transaction reference",
+        "qr reference",
+        "invoice number",
+        "reference number"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/PASSENGER_QR_POOL_SETUP.md",
+          "locator": "Only a signed live, paid, unrefunded and undisputed PHP payment can credit"
+        },
+        {
+          "path": "todago_flutter/lib/passenger_qr_top_up_screen.dart",
+          "locator": "_load"
+        },
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "gcash_missing",
+          "topic": "Retaining the QR reference or invoice identifier for investigation",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_decline",
+      "category": "driver",
+      "question": "What if I cannot take an incoming ride request?",
+      "answer": "Use DECLINE when the request is offered and you cannot take it. Do not accept a trip just to ask the passenger to cancel. If you are no longer available for new work, return to the dashboard availability control and go offline when permitted.",
+      "aliases": [
+        "How can I turn down a ride I cannot take?"
+      ],
+      "keywords": [
+        "cannot take request",
+        "decline ride",
+        "decline request",
+        "reject request"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/ride_request_screen.dart",
+          "locator": "ACCEPT"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "getRideRestriction"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver",
+          "topic": "Declining an offered request when unavailable",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_stop_requests",
+      "category": "driver",
+      "question": "How do I stop receiving new requests for a break?",
+      "answer": "Use the dashboard availability control to go offline when you are free to change status, and wait for confirmation. If you have already accepted a trip, resolve that trip through its own controls first. Going offline is not a substitute for completing or cancelling an accepted booking.",
+      "aliases": [
+        "How can a driver pause new bookings?"
+      ],
+      "keywords": [
+        "stop requests",
+        "take a break",
+        "pause requests",
+        "stop receiving requests"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_dashboard_screen.dart",
+          "locator": "_toggleOnline"
+        },
+        {
+          "path": "todago_backend/src/services/reportPenalties.js",
+          "locator": "getRideRestriction"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver",
+          "topic": "Taking a break by ending availability",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_no_show",
+      "category": "trip",
+      "question": "What can I do if the passenger is absent after I arrive?",
+      "answer": "Mark arrival at the pickup point and try the trip call or message action. If the passenger is still absent, use the pickup screen's no-show cancellation when available. The server permits it only after arrival, before boarding, and on an unpaid eligible booking; it is not a shortcut for an ongoing trip.",
+      "aliases": [
+        "When is passenger no-show cancellation allowed?"
+      ],
+      "keywords": [
+        "passenger absent after arrival",
+        "no show cancellation",
+        "passenger not at pickup",
+        "rider no show"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/navigation_pickup_screen.dart",
+          "locator": "passenger_no_show"
+        },
+        {
+          "path": "todago_backend/src/routes/trips.js",
+          "locator": "No-show cancellation is only available"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_driver_cancel",
+          "topic": "Cancelling an eligible pickup-stage booking",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "passenger",
+          "rider"
+        ],
+        [
+          "absent",
+          "no show",
+          "not at pickup",
+          "never appeared",
+          "did not show",
+          "not here",
+          "not there"
+        ]
+      ]
+    },
+    {
+      "id": "driver_payment_wait",
+      "category": "payments",
+      "question": "Why can I not collect an unconfirmed online payment?",
+      "answer": "For an online-paid trip, the server must confirm the passenger payment before payment collection can complete the ride. Ask the passenger to check the existing attempt and refresh the trip. A screenshot alone does not satisfy that check. Do not mark Cash collected if you have not actually received Cash.",
+      "aliases": [
+        "The passenger says paid but collection is blocked"
+      ],
+      "keywords": [
+        "cannot collect payment",
+        "unconfirmed online payment",
+        "collect button blocked",
+        "waiting for confirmed payment"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/active_trip_driver_screen.dart",
+          "locator": "Collect Payment"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "paymongo_events",
+          "topic": "Payment status must be confirmed by the provider outcome",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "collect",
+          "collection"
+        ],
+        [
+          "payment",
+          "paid"
+        ],
+        [
+          "not confirmed",
+          "unconfirmed",
+          "pending",
+          "blocked",
+          "waiting"
+        ]
+      ]
+    },
+    {
+      "id": "driver_cash_fare",
+      "category": "wallet",
+      "question": "Why did a cash ride not add to my withdrawable wallet?",
+      "answer": "Cash is collected directly by the driver. TodaGo records the paid trip, but does not credit that cash again as withdrawable wallet money. The driver wallet credits eligible confirmed cashless trip earnings after completion.",
+      "aliases": [
+        "Why are cash fares missing from my available wallet?"
+      ],
+      "keywords": [
+        "cash ride wallet",
+        "cash fare wallet",
+        "cash trip earnings",
+        "cash not in wallet"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "syncEarnings"
+        },
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "balance"
+        },
+        {
+          "path": "todago_backend/src/services/tripPayments.js",
+          "locator": "completePaidTrip"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_cashout",
+          "topic": "Cash-out applies to the available electronic earnings balance",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "cashout_status",
+      "category": "wallet",
+      "question": "What do the driver cash-out statuses mean?",
+      "answer": "Pending means the request is awaiting handling; processing means staff are handling the payout. Paid records a completed payout, while rejected or cancelled records a request that will not proceed. Refresh Wallet to see the recorded status and any review note. Submission itself does not mean the money was sent.",
+      "aliases": [
+        "Is a submitted cash-out already paid?"
+      ],
+      "keywords": [
+        "cash out status",
+        "cashout status",
+        "payout status",
+        "pending processing paid"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_wallet_screen.dart",
+          "locator": "Request cash-out"
+        },
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "requestCashOut"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_cashout",
+          "topic": "Checking payout progress separately from submitting a request",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "cash out",
+          "cashout",
+          "payout"
+        ],
+        [
+          "status",
+          "pending",
+          "processing",
+          "paid",
+          "rejected",
+          "cancelled"
+        ]
+      ]
+    },
+    {
+      "id": "cashout_cancel",
+      "category": "wallet",
+      "question": "Can I cancel a driver cash-out request?",
+      "answer": "Only a pending cash-out can be cancelled through the wallet controls. Wait for confirmation and refresh the available balance. A processing payout needs staff follow-up, because the transfer may already be under way. The chatbot cannot cancel or reverse a payout.",
+      "aliases": [
+        "How do I cancel a pending payout?"
+      ],
+      "keywords": [
+        "cancel cash out",
+        "cancel cashout",
+        "cancel payout",
+        "cashout cancellation"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "cancelCashOut"
+        },
+        {
+          "path": "todago_flutter/lib/driver_wallet_screen.dart",
+          "locator": "Cancel cash-out?"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_cashout_blocked",
+          "topic": "A previous payout can still be in progress",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "cash out",
+          "cashout",
+          "payout"
+        ],
+        [
+          "cancel",
+          "cancellation"
+        ]
+      ]
+    },
+    {
+      "id": "cashout_details",
+      "category": "wallet",
+      "question": "Which account details do I enter for driver cash-out?",
+      "answer": "Choose the offered GCash or Maya destination and enter the registered account name and an 11-digit mobile number starting with 09. Check the amount and account details carefully before submitting. Staff process the payout using those details; never enter your provider password or PIN in the name or number fields.",
+      "aliases": [
+        "What details are required for a payout?"
+      ],
+      "keywords": [
+        "cash out account details",
+        "cashout details",
+        "payout account",
+        "cashout mobile number"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "requestCashOut"
+        },
+        {
+          "path": "todago_flutter/lib/driver_wallet_screen.dart",
+          "locator": "E-wallet account name"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_cashout",
+          "topic": "Selecting and checking the destination account",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "cashout_unavailable",
+      "category": "wallet",
+      "question": "Why is the driver cash-out action unavailable?",
+      "answer": "Check whether the account is in payment test mode, whether enough confirmed cashless earnings are available, and whether another request is pending or processing. Follow the current limits shown in Wallet. A displayed trip total alone is not proof of withdrawable cashless funds.",
+      "aliases": [
+        "Why can I not request another cash-out?"
+      ],
+      "keywords": [
+        "cash out unavailable",
+        "cashout unavailable",
+        "cashout disabled",
+        "cannot withdraw",
+        "cashout not working"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_wallet_screen.dart",
+          "locator": "Request cash-out"
+        },
+        {
+          "path": "todago_backend/src/services/driverWallet.js",
+          "locator": "requestCashOut"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_cashout_blocked",
+          "topic": "Eligibility and an existing payout can block another withdrawal",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "driver_rating_feedback",
+      "category": "feedback",
+      "question": "Where should a driver look for feedback about service quality?",
+      "answer": "Review the rating and performance information in the driver profile or dashboard. Use the Driver Growth suggestions as reminders about pickup accuracy and passenger confirmation. Individual trip feedback and incident reports have different purposes; the chatbot cannot reveal private feedback or change a score.",
+      "aliases": [
+        "Where can I find Driver Growth advice?"
+      ],
+      "keywords": [
+        "service quality feedback",
+        "driver growth",
+        "driver performance feedback",
+        "improve service quality"
+      ],
+      "roles": [
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_profile_screen.dart",
+          "locator": "Driver Growth"
+        },
+        {
+          "path": "todago_flutter/lib/driver_performance_card.dart",
+          "locator": "DriverPerformanceCard"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_rating",
+          "topic": "Using post-trip feedback to review service quality",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "ratings_once",
+      "category": "feedback",
+      "question": "Can I submit or edit the same trip rating more than once?",
+      "answer": "The current server accepts one rating from each participating role for a completed, paid trip. It does not provide a general rating-edit action in this flow. If your concern needs correction or investigation, submit a separate issue report rather than repeatedly sending a rating.",
+      "aliases": [
+        "Can I change a rating I already submitted?"
+      ],
+      "keywords": [
+        "edit rating",
+        "change rating",
+        "rate twice",
+        "rating more than once",
+        "duplicate rating"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/rate_driver_screen.dart",
+          "locator": "RateDriverScreen"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "Feedback after payment"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Whether feedback can be changed after submission",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "rating",
+          "rate",
+          "stars"
+        ],
+        [
+          "edit",
+          "change",
+          "twice",
+          "again",
+          "more than once"
+        ]
+      ]
+    },
+    {
+      "id": "rate_later",
+      "category": "feedback",
+      "question": "Can I leave feedback after skipping the end-of-trip screen?",
+      "answer": "Yes, if the completed, paid trip has not already been rated by your role. Passengers can open Bookings > Past; drivers can open Past Trips. Use the trip's available feedback action. Another provider's time limit does not establish a TodaGo rating deadline.",
+      "aliases": [
+        "I forgot to rate immediately after the trip"
+      ],
+      "keywords": [
+        "rate later",
+        "forgot to rate",
+        "skipped rating",
+        "missed feedback",
+        "rate from history"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/rate_driver_screen.dart",
+          "locator": "RateDriverScreen"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "Feedback after payment"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Submitting feedback later through trip history",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "rate",
+          "rating",
+          "feedback"
+        ],
+        [
+          "forgot",
+          "skipped",
+          "later",
+          "missed"
+        ]
+      ]
+    },
+    {
+      "id": "report_correct_trip",
+      "category": "support",
+      "question": "Why must I select a trip when reporting a person?",
+      "answer": "The trip identifies the actual driver and passenger involved. Choose the incident's own trip instead of an unrelated recent booking. A report about a participant may be rejected without that link, because a name alone is not enough to reliably identify the account.",
+      "aliases": [
+        "Why is my report asking for the correct trip?"
+      ],
+      "keywords": [
+        "select trip report",
+        "report needs trip",
+        "wrong trip report",
+        "report trip required"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_support",
+          "topic": "Attaching a support issue to its actual trip",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "report_status",
+      "category": "support",
+      "question": "What happens after I submit an issue report?",
+      "answer": "The report is submitted for admin review. A submitted report is different from a validated incident or an applied restriction. Retain the relevant trip and submission details for follow-up with the project operator. This chatbot cannot retrieve the report's progress or promise a review deadline.",
+      "aliases": [
+        "How can I follow up on a submitted report?"
+      ],
+      "keywords": [
+        "report status",
+        "report progress",
+        "after submitting report",
+        "report review",
+        "follow up report"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_support",
+          "topic": "Following up on an already submitted trip concern",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "report_vs_rating",
+      "category": "feedback",
+      "question": "Is a low star rating the same as an issue report?",
+      "answer": "No. Ratings record feedback about a completed, paid ride. An issue report describes a particular incident for admin review. Reporting remains available after rating. A low rating alone does not mean the chatbot has filed an incident or applied a restriction.",
+      "aliases": [
+        "Does giving one star automatically report someone?"
+      ],
+      "keywords": [
+        "rating versus report",
+        "rating same as report",
+        "low stars report",
+        "feedback versus incident"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_rating",
+          "topic": "Distinguishing a feedback score from an incident concern",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "lost_item",
+      "category": "support",
+      "question": "What should I do if I left an item in the vehicle?",
+      "answer": "Identify the correct trip in your history and keep its date, driver, and destination details. If the active trip contact controls are still available, use them; otherwise report the issue with that trip for operator follow-up. The chatbot cannot locate the item or guarantee its return.",
+      "aliases": [
+        "I left my belongings in the vehicle"
+      ],
+      "keywords": [
+        "lost item",
+        "left item",
+        "forgot item",
+        "missing belongings",
+        "naiwan gamit"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_lost",
+          "topic": "Identifying the ride associated with a lost belonging",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "wrong_vehicle",
+      "category": "support",
+      "question": "What if the arriving vehicle does not match the booking?",
+      "answer": "Compare the arriving driver and vehicle with the details shown in your booking before boarding. If they do not match, clarify through the trip contact controls and use the relevant report option for that trip. Do not confirm that a different vehicle matches just to continue the booking.",
+      "aliases": [
+        "The driver or plate does not match my booking"
+      ],
+      "keywords": [
+        "wrong vehicle",
+        "wrong plate",
+        "vehicle mismatch",
+        "different driver arrived",
+        "wrong driver vehicle"
+      ],
+      "roles": [
+        "passenger"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        },
+        {
+          "path": "todago_backend/REPORT_MODERATION.md",
+          "locator": "The restriction starts when the admin validates the report"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Reporting missing or inconsistent vehicle information",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "route_deviation",
+      "category": "support",
+      "question": "What if the driver follows a different route?",
+      "answer": "Ask about the route using the trip contact controls when appropriate and review the map. If you have a trip concern, report it against the correct booking. Driver GPS alerts depend on received location samples and configured monitoring thresholds; this FAQ does not determine whether a particular route change was improper.",
+      "aliases": [
+        "The driver is taking a route I did not expect"
+      ],
+      "keywords": [
+        "route deviation",
+        "different route",
+        "driver detour",
+        "wrong route",
+        "unexpected route"
+      ],
+      "roles": [
+        "passenger",
+        "driver"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/utils/routeMonitoring.js",
+          "locator": "currentRouteLeg"
+        },
+        {
+          "path": "todago_flutter/lib/report_issue_dialog.dart",
+          "locator": "showReportIssueDialog"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_help",
+          "topic": "Discussing and reporting a route concern",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "register_passenger",
+      "category": "account",
+      "question": "How do I create a passenger account?",
+      "answer": "Choose Passenger and open registration. Enter your full name, email, phone, and password, confirm the password, and accept the displayed terms before submitting. Follow any identity-verification step offered after registration. Use your own details and do not send a password to the FAQ chatbot.",
+      "aliases": [
+        "How do I sign up as a passenger?"
+      ],
+      "keywords": [
+        "passenger registration",
+        "create passenger account",
+        "sign up passenger",
+        "register passenger"
+      ],
+      "roles": [
+        "passenger",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/register_screen.dart",
+          "locator": "_register"
+        },
+        {
+          "path": "todago_flutter/lib/auth_service.dart",
+          "locator": "register"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_signup",
+          "topic": "Creating a passenger account with the required credentials",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "register",
+          "registration",
+          "sign up",
+          "create"
+        ],
+        [
+          "passenger",
+          "rider"
+        ]
+      ]
+    },
+    {
+      "id": "register_driver",
+      "category": "account",
+      "question": "How do I register as a TodaGo driver?",
+      "answer": "Choose Driver and open its registration form. Complete the account, association where applicable, and vehicle details, including the license, plate, and TODA body information requested by the form. Follow the verification instructions. Creating a passenger account does not automatically create driver access.",
+      "aliases": [
+        "What do I need to sign up as a driver?"
+      ],
+      "keywords": [
+        "driver registration",
+        "register driver",
+        "driver sign up",
+        "become driver",
+        "create driver account"
+      ],
+      "roles": [
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/driver_registration_screen.dart",
+          "locator": "DriverRegistrationScreen"
+        },
+        {
+          "path": "todago_flutter/lib/driver_auth_service.dart",
+          "locator": "register"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "angkas_driver_signup",
+          "topic": "Completing a driver application and its vehicle details",
+          "usage": "topic_adaptation"
+        }
+      ],
+      "intentGroups": [
+        [
+          "register",
+          "registration",
+          "sign up",
+          "become"
+        ],
+        [
+          "driver"
+        ]
+      ]
+    },
+    {
+      "id": "login_role",
+      "category": "account",
+      "question": "Why must I choose the correct account role when signing in?",
+      "answer": "TodaGo has separate passenger, driver, operator, and admin entry points. Open the role used when the account was created, then use that account's credentials. If sign-in fails, check the role, email, connection, and displayed error. The chatbot cannot log in or change account permissions for you.",
+      "aliases": [
+        "Why do my credentials fail on a different role?"
+      ],
+      "keywords": [
+        "wrong login role",
+        "account role",
+        "passenger driver login",
+        "cannot log in",
+        "login failed"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/role_selection_screen.dart",
+          "locator": "RoleSelectionScreen"
+        },
+        {
+          "path": "todago_flutter/lib/login_screen.dart",
+          "locator": "LoginScreen"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_signup",
+          "topic": "Resolving registration and sign-in credential problems",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "identity_verification",
+      "category": "account",
+      "question": "Why am I asked to complete identity verification?",
+      "answer": "Some registration flows open an identity-verification session to check the submitted identity information. Follow the instructions in that session and use the status check provided by the app. Registration submission alone is not the same as an approved verification. The chatbot cannot approve an identity or bypass the check.",
+      "aliases": [
+        "What is the identity check after registration?"
+      ],
+      "keywords": [
+        "identity verification",
+        "verify identity",
+        "selfie verification",
+        "verification required",
+        "kyc"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/identity_verification_screen.dart",
+          "locator": "IdentityVerificationScreen"
+        },
+        {
+          "path": "todago_flutter/lib/persona_verification_launcher.dart",
+          "locator": "PersonaVerificationLauncher"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_identity",
+          "topic": "Verifying identity before access to some features",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "identity_retry",
+      "category": "account",
+      "question": "What if my verification camera fails or the status is still under review?",
+      "answer": "Check camera permissions and your connection, then follow the verification session's instructions for a clear capture. Use Check verification status when available. A needs-review status requires review rather than repeated account creation; follow the retry or return guidance shown for the actual status.",
+      "aliases": [
+        "My identity verification has not been approved yet"
+      ],
+      "keywords": [
+        "verification camera",
+        "verification under review",
+        "verification retry",
+        "selfie failed",
+        "needs review"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/identity_verification_screen.dart",
+          "locator": "IdentityVerificationScreen"
+        },
+        {
+          "path": "todago_flutter/lib/persona_verification_launcher.dart",
+          "locator": "PersonaVerificationLauncher"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_identity",
+          "topic": "Camera access, capture quality, and verification retry guidance",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "app_notifications",
+      "category": "technical",
+      "question": "Which ride events can TodaGo notify me about?",
+      "answer": "Configured mobile push support can notify you about request acceptance, nearby pickup, arrival, cancellations, and trip messages. Driver accounts can receive relevant request alerts. Delivery depends on the installed app, permission, connection, and backend configuration. Check the booking screen itself for the latest recorded state.",
+      "aliases": [
+        "What are TodaGo update notifications for?"
+      ],
+      "keywords": [
+        "ride notifications",
+        "trip alerts",
+        "push notifications",
+        "pickup notification",
+        "arrival alert"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/services/pushNotifications.js",
+          "locator": "PUSH_TYPES"
+        },
+        {
+          "path": "todago_flutter/lib/push_notifications.dart",
+          "locator": "PushNotifications"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "uber_driver_guide",
+          "topic": "Using app notifications to stay updated",
+          "usage": "topic_adaptation"
+        }
+      ]
+    },
+    {
+      "id": "notification_missing",
+      "category": "technical",
+      "question": "What if ride notifications do not appear on my phone?",
+      "answer": "Check TodaGo's notification permission and the TodaGo updates channel in system settings, then check connectivity and reopen the app. Some devices also limit background notifications. The app and server must have push configured; enabling a phone setting alone cannot fix an unconfigured backend. Review the active booking directly while troubleshooting.",
+      "aliases": [
+        "How do I enable ride notification banners?"
+      ],
+      "keywords": [
+        "notifications missing",
+        "no notifications",
+        "notification permission",
+        "alerts not appearing",
+        "not receiving notifications"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/services/pushNotifications.js",
+          "locator": "PUSH_TYPES"
+        },
+        {
+          "path": "todago_flutter/lib/push_notifications.dart",
+          "locator": "PushNotifications"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "google_permissions",
+          "topic": "Controlling whether an app may send notifications",
+          "usage": "general_guidance"
+        }
+      ]
+    },
+    {
+      "id": "voice_permission",
+      "category": "technical",
+      "question": "How do I restore microphone permission for voice questions?",
+      "answer": "Open your phone's app settings for TodaGo and review its microphone permission. Allow it if you want voice input, then return to the chatbot and try the microphone again. Menu names vary by device. You can continue typing questions when speech recognition is unavailable.",
+      "aliases": [
+        "I denied the microphone permission by mistake"
+      ],
+      "keywords": [
+        "microphone permission",
+        "restore mic",
+        "allow microphone",
+        "voice permission",
+        "speech permission"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_flutter/lib/ai_chat_screen.dart",
+          "locator": "_toggleMic"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "google_permissions",
+          "topic": "Changing a previously denied microphone permission",
+          "usage": "general_guidance"
+        }
+      ]
+    },
+    {
+      "id": "other_provider_policies",
+      "category": "about",
+      "question": "Do Grab, Angkas, or Uber policies automatically apply to TodaGo?",
+      "answer": "No. Their public FAQs provide related question topics and service-design examples. TodaGo answers use TodaGo's actual implemented rules. Do not apply another app's cancellation fee, refund deadline, payment split, support contact, or insurance promise to a TodaGo booking. Open Sources to see the reference and the adaptation topic.",
+      "aliases": [
+        "Are the linked providers' rules also TodaGo rules?"
+      ],
+      "keywords": [
+        "other provider policies",
+        "grab policies",
+        "angkas policies",
+        "uber policies",
+        "external policies"
+      ],
+      "roles": [
+        "passenger",
+        "driver",
+        "guest"
+      ],
+      "sources": [
+        {
+          "path": "todago_backend/src/data/faqs.json",
+          "locator": "provenance"
+        },
+        {
+          "path": "todago_backend/src/services/faq.js",
+          "locator": "matchFaq"
+        },
+        {
+          "path": "todago_flutter/lib/faq_service.dart",
+          "locator": "FaqService"
+        }
+      ],
+      "reviewedAt": "2026-11-19",
+      "onlineReferences": [
+        {
+          "sourceId": "grab_group",
+          "topic": "Provider-specific payment and cancellation conditions differ",
+          "usage": "topic_adaptation"
+        }
+      ]
+    }
+  ],
+  "adaptationPolicy": "External references identify the origin of a question topic or general guidance. Local source references substantiate TodaGo behavior. Another provider's prices, refund deadlines, contact channels, insurance, and availability guarantees do not become TodaGo policy. Research references are explicitly marked methodology only. Content is paraphrased, not reproduced wholesale."
+}

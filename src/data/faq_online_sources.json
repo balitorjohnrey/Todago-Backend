@@ -1,0 +1,306 @@
+{
+  "retrievedAt": "2026-11-19",
+  "collectionMethod": "AI-assisted review and topic adaptation of public transport FAQ/help collections and payment/device guidance. No bulk benchmark corpus was imported. Rewritten TodaGo instructions are checked against project source code. Research papers are methodology references, not sources of transport answers.",
+  "sources": [
+    {
+      "id": "angkas_help",
+      "author": "Angkas",
+      "date": "n.d.",
+      "title": "Help centre",
+      "url": "https://www.angkas.com/help",
+      "kind": "faq_collection",
+      "scope": "Booking, discounts, wallet, route concerns, tracking, technical issues, and post-trip feedback."
+    },
+    {
+      "id": "angkas_consumer",
+      "author": "Angkas",
+      "date": "n.d.",
+      "title": "Customer",
+      "url": "https://www.angkas.com/consumer",
+      "kind": "faq_collection",
+      "scope": "Choosing services, booking, payment, cancellation, and delivery questions."
+    },
+    {
+      "id": "angkas_passenger",
+      "author": "Angkas",
+      "date": "n.d.",
+      "title": "Angkas passenger",
+      "url": "https://www.angkas.com/our-services/passenger",
+      "kind": "faq_collection",
+      "scope": "Booking steps, pricing explanations, and historical transaction details."
+    },
+    {
+      "id": "grab_advance",
+      "author": "Grab",
+      "date": "n.d.",
+      "title": "About Advance Bookings",
+      "url": "https://help.grab.com/passenger/en-ph/360001392588",
+      "kind": "faq_article",
+      "scope": "Advance reservation creation, changes, acceptance, and availability. Source text reviewed through indexed Help Centre content; the live page can require JavaScript."
+    },
+    {
+      "id": "grab_group",
+      "author": "Grab",
+      "date": "n.d.",
+      "title": "About Group Rides",
+      "url": "https://help.grab.com/passenger/en-ph/40001565",
+      "kind": "faq_article",
+      "scope": "Group size, stops, fare review, booking notes, tracking, and payment arrangements. Source text reviewed through indexed Help Centre content; the live page can require JavaScript."
+    },
+    {
+      "id": "grab_identity",
+      "author": "Grab",
+      "date": "n.d.",
+      "title": "Complete your selfie verification",
+      "url": "https://help.grab.com/passenger/en-ph/360002081467",
+      "kind": "faq_article",
+      "scope": "Identity checks, camera access, photo quality, and retrying verification. Provider-specific processing/privacy promises are not adopted."
+    },
+    {
+      "id": "grab_driver_cancel",
+      "author": "Grab",
+      "date": "n.d.",
+      "title": "How to cancel a trip",
+      "url": "https://help.grab.com/driver/en-ph/115007914687",
+      "kind": "faq_article",
+      "scope": "Driver cancellation and passenger-requested cancellation. TodaGo eligibility is checked independently."
+    },
+    {
+      "id": "uber_pickup",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "Changing your pickup location",
+      "url": "https://help.uber.com/riders/article/updating-your-pick-up-location---?nodeId=a07378ea-2906-42f8-b7c0-dd8060656488",
+      "kind": "faq_article",
+      "scope": "Reviewing GPS suggestions, choosing addresses, and correcting pickup pins before confirmation."
+    },
+    {
+      "id": "uber_unavailable",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "I can't request a ride",
+      "url": "https://help.uber.com/riders/article/node-title?nodeId=9a234cb2-60d6-428c-aa67-0458bfaef081",
+      "kind": "faq_article",
+      "scope": "Unavailable drivers, coverage, booking failure, and account/payment checks."
+    },
+    {
+      "id": "uber_support",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "How to contact support",
+      "url": "https://help.uber.com/riders/article/how-to-contact-support?nodeId=4c69afef-5739-4842-9e98-ed0087b873db",
+      "kind": "faq_article",
+      "scope": "Selecting the relevant trip, reviewing its details, submitting an issue, and following up. Uber contact channels and response times do not apply to TodaGo."
+    },
+    {
+      "id": "uber_duplicate",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "I was charged twice or a different amount than on my receipt",
+      "url": "https://help.uber.com/riders/article/i-was-charged-twice-or-a-different-amount-than-on-my-receipt--?nodeId=355a5c7d-a269-4c5b-b4a5-cfc70d7deed8",
+      "kind": "faq_article",
+      "scope": "Reviewing suspected duplicate charges. Uber authorization-hold rules are not treated as TodaGo behavior."
+    },
+    {
+      "id": "uber_fare",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "My fare doesn't match the upfront fare I was shown",
+      "url": "https://help.uber.com/en/riders/article/my-fare-doesnt-match-the-upfront-fare-i-was-shown?nodeId=8e7a91c7-f4c5-40d5-a4e3-6a8f483340d0",
+      "kind": "faq_article",
+      "scope": "Comparing displayed estimates, route distance, stops, and disputed fares. TodaGo's own fare formula takes precedence."
+    },
+    {
+      "id": "uber_lost",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "Forgot something in an Uber? We will help you find it!",
+      "url": "https://help.uber.com/en/riders/article/forgot-something-in-an-uber?nodeId=feab9beb-9eac-47a2-b63a-6915d8821e1d",
+      "kind": "faq_article",
+      "scope": "Identifying the trip and contacting the appropriate person about missing belongings, without promising recovery."
+    },
+    {
+      "id": "uber_rating",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "Rating a driver",
+      "url": "https://help.uber.com/am/riders/article/rating-a-driver?nodeId=478d7463-99cb-48ff-a81f-0ab227a1e267",
+      "kind": "faq_article",
+      "scope": "Post-trip stars, compliments, and issue feedback. TodaGo rating eligibility and editing limits are separately verified."
+    },
+    {
+      "id": "uber_driver",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "Getting a trip request",
+      "url": "https://help.uber.com/driving-and-delivering/article/what-are-the-steps-to-sign-up?nodeId=e7228ac8-7c7f-4ad6-b120-086d39f2c94c",
+      "kind": "faq_article",
+      "scope": "Going online/offline, accepting or declining requests, and taking a break."
+    },
+    {
+      "id": "uber_driver_guide",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "3 - Learn how to use the Driver App",
+      "url": "https://help.uber.com/en-GB/driving-and-delivering/article/node-title?nodeId=8b30c1f5-91f4-40c5-838f-2037bb0ca95e",
+      "kind": "help_guide",
+      "scope": "Pickup/destination navigation, earnings, notifications, and driver activity. Uber payout schedules are not used."
+    },
+    {
+      "id": "uber_no_requests",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "I'm not getting trip or delivery requests",
+      "url": "https://help.uber.com/driving-and-delivering/article/im-not-getting-trip-or-delivery-requests?nodeId=ae8661b6-7746-47fb-b066-a65e22b988d8",
+      "kind": "faq_article",
+      "scope": "Driver availability and troubleshooting lack of incoming requests."
+    },
+    {
+      "id": "uber_cashout",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "Cashing out earnings",
+      "url": "https://help.uber.com/sw/driving-and-delivering/article/cashing-out-earnings?nodeId=fceba47c-6e09-4cec-9b9c-c2e96a9a70cb",
+      "kind": "faq_article",
+      "scope": "Available earnings, selecting a destination account, confirmation, and payout status. TodaGo uses staff-processed GCash/Maya payouts, not Uber's schedule or instant-transfer promise."
+    },
+    {
+      "id": "uber_cashout_blocked",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "I was notified I'm ineligible for Next-day Cashout",
+      "url": "https://help.uber.com/driving-and-delivering/article/i-was-notified-im-ineligible-for-next-day-cashout?nodeId=4935dfa0-aac0-48c7-8f68-e36c9882171e",
+      "kind": "faq_article",
+      "scope": "A previous pending payout or eligibility limits can prevent another request. TodaGo-specific checks are authoritative."
+    },
+    {
+      "id": "uber_contact",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "Contacting a rider",
+      "url": "https://help.uber.com/en-GB/driving-and-delivering/article/what-are-the-steps-to-sign-up?nodeId=4f6cfc84-ae65-4292-ac8b-abd96d165271",
+      "kind": "faq_article",
+      "scope": "Calling or messaging the assigned participant. Uber's number masking and voice readout features are not claimed for TodaGo."
+    },
+    {
+      "id": "uber_signup",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "I can't sign up for a Rider account",
+      "url": "https://help.uber.com/riders/article/i-cant-sign-up-for-a-rider-account?nodeId=f78d6393-8a09-4599-8375-21a410eebcf0",
+      "kind": "faq_article",
+      "scope": "Account registration, sign-in trouble, and account credentials. TodaGo's own registration fields and role selection are used."
+    },
+    {
+      "id": "uber_photo",
+      "author": "Uber",
+      "date": "n.d.",
+      "title": "How do I upload my profile picture?",
+      "url": "https://help.uber.com/riders/article/how-do-i-upload-my-profile-picture?nodeId=c8699b27-202f-4b09-855f-3de49f885d41",
+      "kind": "faq_article",
+      "scope": "Adding or updating an account photo. TodaGo's gallery/sync workflow is independently checked."
+    },
+    {
+      "id": "bsp_qrph",
+      "author": "Bangko Sentral ng Pilipinas",
+      "date": "n.d.",
+      "title": "FAQs on QR Ph person-to-merchant payments (P2M)",
+      "url": "https://www.bsp.gov.ph/Media_and_Research/Primers%20Faqs/QR_Ph_P2M_FAQs.pdf",
+      "kind": "official_faq",
+      "scope": "QR Ph basics, participating financial apps, device/internet requirements, merchant checks, scanning, and approval. No publication date is assumed from the PDF's internal document code."
+    },
+    {
+      "id": "gcash_scan",
+      "author": "GCash",
+      "date": "n.d.",
+      "title": "Paano mag scan to pay via QR",
+      "url": "https://help.gcash.com/hc/fil/articles/360017563034-Paano-mag-scan-to-pay-via-QR",
+      "kind": "faq_article",
+      "scope": "Using a payment app to scan a merchant QR, review payment details, and authorize payment."
+    },
+    {
+      "id": "gcash_missing",
+      "author": "GCash",
+      "date": "n.d.",
+      "title": "Did not receive money?",
+      "url": "https://help.gcash.com/hc/en-us/articles/61819844912153-Did-not-receive-money",
+      "kind": "faq_article",
+      "scope": "Checking transaction history, avoiding immediate retries during processing, retaining the QR reference, and contacting the merchant/provider. Published GCash reversal timelines are not promised by TodaGo."
+    },
+    {
+      "id": "paymongo_events",
+      "author": "PayMongo",
+      "date": "n.d.",
+      "title": "Events",
+      "url": "https://docs.paymongo.com/docs/developer-tools-webhooks-events",
+      "kind": "technical_documentation",
+      "scope": "Provider payment outcomes and separate live/test events; supports server-confirmed rather than button-confirmed payment."
+    },
+    {
+      "id": "google_location",
+      "author": "Google",
+      "date": "n.d.",
+      "title": "Manage location permissions for apps",
+      "url": "https://support.google.com/android/answer/6179507?hl=en",
+      "kind": "device_help",
+      "scope": "App-specific location access, approximate/precise access, and permission changes."
+    },
+    {
+      "id": "google_permissions",
+      "author": "Google",
+      "date": "n.d.",
+      "title": "Change app permissions on your Android phone",
+      "url": "https://support.google.com/android/answer/9431959?hl=en",
+      "kind": "device_help",
+      "scope": "Camera, microphone, location, photo, and notification permissions. Device-specific menus can differ."
+    },
+    {
+      "id": "mfaq_paper",
+      "author": "De Bruyn, M., Lotfi, E., Buhmann, J., & Daelemans, W.",
+      "date": "2021",
+      "title": "MFAQ: A multilingual FAQ dataset",
+      "url": "https://aclanthology.org/2021.mrqa-1.1/",
+      "kind": "research_paper",
+      "publication": "Proceedings of the 3rd Workshop on Machine Reading for Question Answering",
+      "pages": "1–13",
+      "publisher": "Association for Computational Linguistics",
+      "doi": "10.18653/v1/2021.mrqa-1.1",
+      "scope": "Related literature about FAQ corpora and multilingual retrieval; no MFAQ records were imported into TodaGo."
+    },
+    {
+      "id": "paraphrase_paper",
+      "author": "Karan, M., & Šnajder, J.",
+      "date": "2018",
+      "title": "Paraphrase-focused learning to rank for domain-specific frequently asked questions retrieval",
+      "url": "https://doi.org/10.1016/j.eswa.2017.09.031",
+      "kind": "research_paper",
+      "publication": "Expert Systems with Applications",
+      "volume": "91",
+      "pages": "418–433",
+      "scope": "Related literature about query wording and paraphrase-focused retrieval; TodaGo does not implement the paper's trained ranking models."
+    },
+    {
+      "id": "datasheets_paper",
+      "author": "Gebru, T., Morgenstern, J., Vecchione, B., Vaughan, J. W., Wallach, H., Daumé III, H., & Crawford, K.",
+      "date": "2021",
+      "title": "Datasheets for datasets",
+      "url": "https://doi.org/10.1145/3458723",
+      "kind": "research_paper",
+      "publication": "Communications of the ACM",
+      "volume": "64",
+      "issue": "12",
+      "pages": "86–92",
+      "openAccessUrl": "https://arxiv.org/abs/1803.09010",
+      "scope": "Dataset origin, collection, composition, intended use, and limitations; not a source of transport answers."
+    },
+    {
+      "id": "angkas_driver_signup",
+      "author": "Angkas",
+      "date": "n.d.",
+      "title": "Be an Angcars driver",
+      "url": "https://www.angkas.com/angkas-be-an-angcars-driver",
+      "kind": "faq_collection",
+      "scope": "Driver registration requirements and following up an application; vehicle types, dates, commercial fees, and contact details are not adopted for TodaGo."
+    }
+  ]
+}

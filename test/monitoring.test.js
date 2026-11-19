@@ -386,6 +386,206 @@ test('trip monitoring uses real isolated PostgreSQL migrations and transactions'
   t.after(f.close);
   t.beforeEach(f.seed);
 
+  await t.test('review history retains validation and rejection; undo restores a driver without erasing its penalty record', async () => {
+    await f.pg.exec(`INSERT INTO issue_reports(issue_id,reporter_role,report_type,subject_role,subject_id,title)
+      VALUES ('wrong-driver','passenger','driver_behavior','driver','driver-1','Wrongly accused'),
+        ('rejected-report','driver','passenger_issue','passenger','passenger-1','Rejected incident');`);
+    const review = (id, status, extra = {}) => f.request('admin', '/reports/:issueId/status', {
+      method: 'patch', params: { issueId: id }, body: { status, ...extra },
+    });
+    const history = id => f.request('admin', '/reports/:issueId/history', { params: { issueId: id } });
+    assert.equal((await review('wrong-driver','validated', {
+      penaltyDuration: 'permanent', adminNotes: 'Initial assessment',
+    })).code, 200);
+    await review('rejected-report', 'rejected', { adminNotes: 'Insufficient evidence' });
+    assert.ok(await f.load('services/reportPenalties.js').getRideRestriction('driver','driver-1'));
+    const all = await f.request('admin', '/reports/history');
+    assert.equal(all.data.reports.length, 2);
+    assert.equal(all.data.reports.find(row => row.issue_id === 'wrong-driver').penalty_active, true);
+    const first = await history('wrong-driver');
+    assert.equal(first.data.history.length, 1);
+    assert.equal(first.data.history[0].action, 'validated');
+    assert.equal(first.data.history[0].admin_id, 'admin-1');
+    assert.equal(first.data.history[0].penalty_permanent, true);
+    const undo = () => f.request('admin', '/reports/:issueId/undo-penalty', { method: 'post',
+      params: { issueId: 'wrong-driver' }, body: { reason: 'Mistaken identity confirmed' } });
+    const attempts = await Promise.all([undo(),undo()]);
+    assert.ok(attempts.every(result => result.code === 200));
+    assert.equal(await f.load('services/reportPenalties.js').getRideRestriction('driver','driver-1'), null);
+    const online = await f.request('trips', '/drivers/online', { role: 'passenger' });
+    assert.ok(online.data.drivers.some(driver => driver.driver_id === 'driver-1'));
+    const after = await history('wrong-driver');
+    assert.equal(after.data.report.status, 'validated', 'original decision remains available');
+    assert.equal(after.data.report.penalty_permanent, true, 'original penalty remains documented');
+    assert.equal(after.data.report.penalty_active, false);
+    assert.equal(after.data.report.penalty_revoke_reason, 'Mistaken identity confirmed');
+    assert.equal(after.data.history.length, 2, 'concurrent retries record only one reversal');
+    assert.equal(after.data.history[1].action, 'penalty_revoked');
+    assert.equal(after.data.history[0].notes, 'Initial assessment');
+    await review('wrong-driver', 'validated', { penaltyDuration: 'permanent' });
+    assert.equal(await f.load('services/reportPenalties.js').getRideRestriction('driver','driver-1'), null,
+      'a stale/retried validation cannot revive an undone penalty');
+    await review('rejected-report', 'pending', { adminNotes: 'New evidence received' });
+    const reopened = await history('rejected-report');
+    assert.deepEqual(Array.from(reopened.data.history, row => row.action), ['rejected','reopened']);
+    assert.equal(reopened.data.history[0].notes, 'Insufficient evidence');
+    assert.ok((await f.request('admin','/reports/history')).data.reports.some(row => row.issue_id === 'rejected-report'));
+    assert.equal((await f.request('admin','/reports/history', { query: { status: 'revoked' } })).data.reports.length, 1);
+  });
+
+  await t.test('undo is admin-only, requires a reason, preserves unrelated restrictions and rolls back if audit fails', async () => {
+    await f.pg.exec(`INSERT INTO issue_reports(issue_id,reporter_role,report_type,subject_role,subject_id,title)
+      VALUES ('first-penalty','driver','incident','passenger','passenger-1','First incident'),
+        ('second-penalty','driver','incident','passenger','passenger-1','Second incident'),
+        ('no-penalty','system','incident','driver','driver-1','System alert');`);
+    const review = id => f.request('admin','/reports/:issueId/status', { method: 'patch',
+      params: { issueId: id }, body: { status: 'validated', penaltyDuration: '5h' } });
+    await review('first-penalty'); await review('second-penalty');
+    const undo = (id, options = {}) => f.request('admin','/reports/:issueId/undo-penalty', {
+      method: 'post', params: { issueId: id }, body: { reason: 'Review correction' }, ...options,
+    });
+    assert.equal((await undo('first-penalty', { role: 'driver' })).code, 403);
+    assert.equal((await f.request('admin','/reports/history', { role: 'operator' })).code, 403);
+    assert.equal((await f.request('admin','/reports/:issueId/history', { role: 'passenger', params: { issueId: 'first-penalty' } })).code, 403);
+    assert.equal((await undo('first-penalty', { body: { reason: '   ' } })).code, 422);
+    assert.equal((await undo('first-penalty', { body: { reason: 'a'.repeat(801) } })).code, 422);
+    assert.equal((await undo('missing')).code, 404);
+    assert.equal((await undo('no-penalty')).code, 409);
+    await f.pg.exec("ALTER TABLE report_review_history ADD CONSTRAINT test_undo_audit_failure CHECK (action <> 'penalty_revoked')");
+    try {
+      assert.equal((await undo('first-penalty')).code, 500);
+      assert.equal((await f.database.dbGet("SELECT penalty_revoked_at FROM issue_reports WHERE issue_id='first-penalty'")).penalty_revoked_at, null);
+    } finally { await f.pg.exec('ALTER TABLE report_review_history DROP CONSTRAINT test_undo_audit_failure'); }
+    assert.equal((await undo('first-penalty')).code, 200);
+    assert.equal((await f.book({ driverId: 'driver-2' })).data.code, 'PASSENGER_BOOKING_COOLDOWN',
+      'the second independent incident is still enforced');
+    assert.equal((await undo('second-penalty')).code, 200);
+    assert.equal((await f.book({ driverId: 'driver-2' })).code, 201);
+    await f.pg.exec("ALTER TABLE report_review_history ADD CONSTRAINT test_review_audit_failure CHECK (action <> 'validated') NOT VALID");
+    try {
+      assert.equal((await review('no-penalty')).code, 500);
+      assert.equal((await f.database.dbGet("SELECT status FROM issue_reports WHERE issue_id='no-penalty'")).status, 'pending');
+    } finally { await f.pg.exec('ALTER TABLE report_review_history DROP CONSTRAINT test_review_audit_failure'); }
+  });
+
+  await t.test('all older decisions are paginated and migrations import each legacy review only once', async () => {
+    await f.pg.exec(`INSERT INTO issue_reports(issue_id,reporter_role,report_type,title,status,admin_notes,validated_at)
+      SELECT 'legacy-review-'||LPAD(i::text,3,'0'), 'system','alert','Older review '||i,
+        CASE WHEN i%2=0 THEN 'rejected' ELSE 'validated' END, 'Original review note',
+        NOW()-i*INTERVAL '1 minute' FROM GENERATE_SERIES(1,110) i;`);
+    await f.initializer.initializeDatabase(); await f.initializer.initializeDatabase();
+    assert.equal((await f.database.dbGet('SELECT COUNT(*) FROM report_review_history')).count, 110);
+    const seen = new Set();
+    for (let offset = 0; offset < 125; offset += 25) {
+      const page = await f.request('admin','/reports/history', { query: { offset } });
+      assert.equal(page.code, 200);
+      assert.equal(page.data.has_more, offset < 100);
+      page.data.reports.forEach(row => seen.add(row.issue_id));
+    }
+    assert.equal(seen.size, 110, 'older reviews beyond the former 100-item cap remain reachable');
+    const detail = await f.request('admin','/reports/:issueId/history', { params: { issueId: 'legacy-review-001' } });
+    assert.equal(detail.data.history[0].action, 'legacy_review');
+    assert.equal(detail.data.history[0].notes, 'Original review note');
+    assert.equal(detail.data.history[0].admin_id, null, 'unknown reviewers are not fabricated');
+    const rejected = await f.request('admin','/reports/history', { query: { status: 'rejected', limit: 100 } });
+    assert.equal(rejected.data.reports.length, 55);
+    assert.ok(rejected.data.reports.every(row => row.status === 'rejected'));
+  });
+
+  await t.test('destination map counts successful rides across pickups and preserves scope and missing GPS', async () => {
+    await f.pg.exec(`INSERT INTO trips(trip_id, driver_id, pickup_location, destination,
+        destination_lat, destination_lng, status, fare, request_timestamp, end_timestamp)
+      VALUES ('map-1','driver-1','Terminal','College',7.3001,125.6801,'completed',20,NOW()-INTERVAL '1 hour',NOW()),
+        ('map-2','driver-1','Market',' college ',7.3002,125.6802,'completed',30,NOW()-INTERVAL '2 hours',NOW()),
+        ('map-cancel','driver-1','Market','College',7.3001,125.6801,'cancelled',90,NOW(),NULL),
+        ('map-active','driver-1','Market','College',7.3001,125.6801,'ongoing',90,NOW(),NULL),
+        ('map-other','driver-2','Market','College',7.3001,125.6801,'completed',40,NOW(),NOW()),
+        ('map-missing','driver-1','Market','No GPS',NULL,125.68,'completed',10,NOW(),NOW()),
+        ('map-invalid','driver-1','Market','Invalid GPS',999,125.68,'completed',10,NOW(),NOW()),
+        ('map-newly-completed','driver-1','Market','Old reservation',7.31,125.69,'completed',20,NOW()-INTERVAL '40 days',NOW()),
+        ('map-old','driver-1','Market','Expired',7.31,125.69,'completed',20,NOW()-INTERVAL '40 days',NOW()-INTERVAL '39 days');
+      INSERT INTO trips(trip_id,driver_id,destination,destination_lat,destination_lng,status,end_timestamp)
+        SELECT 'many-'||i, 'driver-1', 'Destination '||i, 7.31+i*.001,125.69,'completed',NOW()
+        FROM GENERATE_SERIES(1,8) i;`);
+    const get = (role = 'admin') => f.request(role, '/analytics/destinations', { role });
+    const admin = await get();
+    assert.equal(admin.code, 200, admin.data?.message);
+    const college = admin.data.destinations.find(row => row.destination.toLowerCase() === 'college');
+    assert.equal(college.completed_trips, 3);
+    assert.equal(college.gross_revenue, 90);
+    assert.ok(college.destination_lat > 7.3000 && college.destination_lat < 7.3003);
+    assert.ok(admin.data.destinations.length > 6, 'map is not truncated to the old top six routes');
+    for (const name of ['No GPS', 'Invalid GPS']) {
+      const missing = admin.data.destinations.find(row => row.destination === name);
+      assert.equal(missing.destination_lat, null);
+      assert.equal(missing.destination_lng, null);
+    }
+    assert.ok(admin.data.destinations.some(row => row.destination === 'Old reservation'));
+    assert.ok(!admin.data.destinations.some(row => row.destination === 'Expired'));
+    const operator = await get('operator');
+    assert.equal(operator.data.destinations.find(row => row.destination.toLowerCase() === 'college').completed_trips, 2);
+    const id = college.destination_id;
+    await f.pg.exec("UPDATE trips SET status='completed', end_timestamp=NOW() WHERE trip_id='map-active'");
+    assert.equal((await get()).data.destinations.find(row => row.destination_id === id).completed_trips, 4);
+    assert.equal((await f.request('admin', '/analytics/destinations', { role: 'driver' })).code, 403);
+    await f.pg.exec("UPDATE operators SET toda_id=NULL WHERE operator_id='operator-1'");
+    assert.equal((await get('operator')).code, 404);
+    assert.equal((await f.request('operator', '/analytics/peak-hours', { role: 'operator' })).code, 404);
+  });
+
+  await t.test('ride trends return chronological days, Monday weeks and months with only final outcomes', async () => {
+    await f.pg.exec(`INSERT INTO trips(trip_id,driver_id,status,request_timestamp)
+      VALUES ('trend-done','driver-1','completed',NOW()-INTERVAL '2 hours'),
+        ('trend-cancel','driver-1','cancelled',NOW()-INTERVAL '2 days'),
+        ('trend-pending','driver-1','requested',NOW()-INTERVAL '2 hours'),
+        ('trend-other','driver-2','completed',NOW()-INTERVAL '2 hours'),
+        ('trend-old','driver-1','completed',NOW()-INTERVAL '2 months');`);
+    const get = (period, days, role = 'admin') => f.request(role, '/analytics/peak-hours', {
+      role, query: { period, days, limit: 24 },
+    });
+    for (const [period, days, length] of [['day',30,30], ['week',84,12], ['month',365,12]]) {
+      const result = await get(period, days);
+      assert.equal(result.code, 200, result.data?.message);
+      const rows = result.data.hours;
+      assert.equal(rows.length, length);
+      assert.ok(rows.every((row, index) => index === 0 || row.period_start > rows[index-1].period_start));
+      assert.equal(rows.reduce((sum, row) => sum + row.completed_trips, 0), period === 'day' ? 2 : 3);
+      assert.equal(rows.reduce((sum, row) => sum + row.cancelled_trips, 0), 1);
+      assert.ok(rows.some(row => row.completed_trips === 0 && row.cancelled_trips === 0));
+      if (period === 'week') assert.ok(rows.every(row => new Date(row.period_start).getUTCDay() === 1));
+      if (period === 'month') assert.ok(rows.every(row => row.period_start.endsWith('-01')));
+      for (const role of ['operator', 'driver']) {
+        const scoped = await get(period, days, role);
+        assert.equal(scoped.data.hours.reduce((sum, row) => sum + row.completed_trips, 0), period === 'day' ? 1 : 2);
+      }
+    }
+    const hours = (await get('hour', 30)).data.hours;
+    assert.equal(hours.reduce((sum, row) => sum + row.total_requests, 0), 3,
+      'ongoing/requested rides are excluded from the hourly totals too');
+  });
+
+  await t.test('calendar days and hours use Philippine midnight rather than UTC midnight', async () => {
+    await f.pg.exec(`WITH boundary AS (
+      SELECT DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '1 day' AS midnight
+    ) INSERT INTO trips(trip_id, driver_id, status, request_timestamp)
+      SELECT 'before-midnight','driver-1','completed',
+        (midnight - INTERVAL '15 minutes') AT TIME ZONE 'Asia/Manila' FROM boundary
+      UNION ALL SELECT 'after-midnight','driver-1','cancelled',
+        (midnight + INTERVAL '15 minutes') AT TIME ZONE 'Asia/Manila' FROM boundary;`);
+    const dates = await f.database.dbAll(`SELECT status,
+      TO_CHAR(request_timestamp AT TIME ZONE 'Asia/Manila','YYYY-MM-DD') AS local_day
+      FROM trips ORDER BY request_timestamp`);
+    const response = await f.request('admin', '/analytics/peak-hours', { query: { period: 'day' } });
+    const days = response.data.hours;
+    assert.notEqual(dates[0].local_day, dates[1].local_day);
+    assert.equal(days.find(row => row.period_start === dates[0].local_day).completed_trips, 1);
+    assert.equal(days.find(row => row.period_start === dates[0].local_day).cancelled_trips, 0);
+    assert.equal(days.find(row => row.period_start === dates[1].local_day).cancelled_trips, 1);
+    const hourly = await f.request('admin', '/analytics/peak-hours', { query: { limit: 24 } });
+    assert.equal(hourly.data.hours.find(row => row.hour_of_day === 23).completed_trips, 1);
+    assert.equal(hourly.data.hours.find(row => row.hour_of_day === 0).cancelled_trips, 1);
+  });
+
   await t.test('driver profiles are available to admins and scoped to the operator association', async () => {
     await f.pg.exec(`UPDATE drivers SET email = 'driver@test.invalid', profile_photo_url = 'https://example.invalid/driver.jpg'
       WHERE driver_id = 'driver-1';`);

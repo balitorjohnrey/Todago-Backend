@@ -51,6 +51,35 @@ cancelled. Time-limited restrictions expire through database time checks. API
 denials include `restrictedUntil` and `retryAfterSeconds`. Permanent denials
 return `permanent: true` with both timing fields set to `null`.
 
+## Review history and undoing a penalty
+
+Admins can open **Reports > Report History** to browse validated, rejected,
+resolved, reopened, and penalty-undone reports. The list is paginated without
+the pending queue's 100-report cap. Each report has a chronological review trail
+with the decision, admin account identifier, timestamp, notes, and original
+penalty. Rejected reports can be reopened for a new review, with the earlier
+rejection preserved.
+
+`GET /api/admin/reports/history` accepts `status` (`all`, `validated`, `rejected`,
+`resolved`, `pending`, or `revoked`), `offset`, and `limit` (default 25, maximum
+100). `GET /api/admin/reports/:issueId/history` returns the report and its review
+events. Existing decisions are imported once as `legacy_review`; an unknown
+reviewer or a review trail that was never recorded is not fabricated. The admin
+identifier represents the authenticated account; shared admin credentials do
+not identify an individual person.
+
+`POST /api/admin/reports/:issueId/undo-penalty` requires a nonblank `reason` of
+up to 800 characters. It revokes a timed or permanent penalty for that incident
+and appends the reversal to history. The original report status, duration, and
+review notes remain available. Repeated undo requests are idempotent. A revoked
+penalty stays revoked even if an older client retries validation. Other active
+incidents still restrict the account. Enforcement resumes normal booking and
+driver availability checks on the next request; it does not automatically set
+an offline driver online.
+
+Review changes and their audit events commit in one transaction with a report
+row lock. If recording history fails, the decision or reversal is rolled back.
+
 Historical entries in `passenger_blacklist` continue to be enforced separately.
 
 Database initialization adds the report penalty columns and lookup index on

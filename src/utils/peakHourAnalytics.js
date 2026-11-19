@@ -34,7 +34,11 @@ async function getPeakHourAnalysis({
   todaId = null,
   days = 30,
   limit = 6,
+  period = 'hour',
 } = {}) {
+  if (['day', 'week', 'month'].includes(period)) {
+    return getPeriodAnalysis({ driverId, todaId, days, period });
+  }
   const safeDays = clampInt(days, 30, 1, 365);
   const safeLimit = clampInt(limit, 6, 1, 24);
   const params = [safeDays, safeLimit];
@@ -67,6 +71,8 @@ async function getPeakHourAnalysis({
       FROM trips tr
       ${join}
       WHERE tr.request_timestamp >= NOW() - ($1::int * INTERVAL '1 day')
+        AND tr.request_timestamp <= NOW()
+        AND tr.status IN ('completed', 'cancelled')
         ${scopeWhere}
       GROUP BY hour_of_day
     )
@@ -101,6 +107,55 @@ async function getPeakHourAnalysis({
       last_request_at: row.last_request_at,
     };
   });
+}
+
+async function getPeriodAnalysis({ driverId, todaId, days, period }) {
+  // Only allowlisted date units are interpolated; scope and range stay bound.
+  const safeDays = clampInt(days, 30, 1, 365);
+  const count = period === 'day' ? safeDays
+    : Math.ceil(safeDays / (period === 'week' ? 7 : 31));
+  const params = [count];
+  let join = '', scope = '';
+  if (driverId) {
+    params.push(driverId);
+    scope = 'AND tr.driver_id = $2';
+  } else if (todaId) {
+    params.push(todaId);
+    join = 'JOIN drivers d ON d.driver_id = tr.driver_id';
+    scope = 'AND d.toda_id = $2';
+  }
+  const rows = await dbAll(`
+    WITH bounds AS (
+      SELECT DATE_TRUNC('${period}', NOW() AT TIME ZONE 'Asia/Manila') AS current_period
+    ), buckets AS (
+      SELECT GENERATE_SERIES(current_period - (($1::int - 1) * INTERVAL '1 ${period}'),
+        current_period, INTERVAL '1 ${period}') AS period_start FROM bounds
+    ), totals AS (
+      SELECT DATE_TRUNC('${period}', tr.request_timestamp AT TIME ZONE 'Asia/Manila') AS period_start,
+        COUNT(*) FILTER (WHERE tr.status = 'completed') AS completed_trips,
+        COUNT(*) FILTER (WHERE tr.status = 'cancelled') AS cancelled_trips
+      FROM trips tr
+      ${join}
+      WHERE tr.status IN ('completed', 'cancelled')
+        AND tr.request_timestamp >=
+          ((SELECT MIN(period_start) FROM buckets) AT TIME ZONE 'Asia/Manila')
+        AND tr.request_timestamp <= NOW()
+        ${scope}
+      GROUP BY period_start
+    )
+    SELECT TO_CHAR(b.period_start, 'YYYY-MM-DD') AS period_start,
+      TO_CHAR(b.period_start, '${period === 'month' ? 'Mon YYYY' : 'DD Mon YYYY'}') AS period_label,
+      TO_CHAR(b.period_start, '${period === 'month' ? 'Mon' : 'DD Mon'}') AS axis_label,
+      COALESCE(t.completed_trips, 0) AS completed_trips,
+      COALESCE(t.cancelled_trips, 0) AS cancelled_trips
+    FROM buckets b LEFT JOIN totals t USING (period_start)
+    ORDER BY b.period_start
+  `, params);
+  return rows.map(row => ({ ...row,
+    period_label: period === 'week' ? `Week of ${row.period_label}` : row.period_label,
+    completed_trips: toInt(row.completed_trips),
+    cancelled_trips: toInt(row.cancelled_trips),
+  }));
 }
 
 module.exports = {

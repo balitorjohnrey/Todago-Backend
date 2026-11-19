@@ -4,9 +4,9 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { dbRun, dbGet, dbAll } = require('../db/database');
-const { isPenaltyDuration, penaltyTarget, reviewIssueReport } = require('../services/reportPenalties');
+const { isPenaltyDuration, penaltyTarget, reviewIssueReport, undoReportPenalty } = require('../services/reportPenalties');
 const { registerAdminMonitoring } = require('./adminMonitoring');
-const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
+const { clampInt, getRoutePerformance, getDestinationPerformance } = require('../utils/routeAnalytics');
 const {
   clampInt: clampPeakInt,
   getPeakHourAnalysis,
@@ -229,6 +229,70 @@ router.get('/reports', requireAdminAuth, async (req, res) => {
   }
 });
 
+router.get('/reports/history', requireAdminAuth, async (req, res) => {
+  try {
+    const status = ['validated','rejected','resolved','revoked','pending'].includes(req.query.status)
+      ? req.query.status : 'all';
+    const limit = clampInt(req.query.limit, 25, 1, 100);
+    const offset = clampInt(req.query.offset, 0, 0, 1000000);
+    const params = [limit + 1, offset];
+    let filter = '';
+    if (status === 'revoked') filter = 'AND ir.penalty_revoked_at IS NOT NULL';
+    else if (status !== 'all') { params.push(status); filter = 'AND ir.status = $3'; }
+    const rows = await dbAll(`SELECT ir.*,
+      COALESCE(ir.restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent,
+      COALESCE(ir.status IN ('validated','resolved') AND ir.penalty_revoked_at IS NULL
+        AND ir.restriction_until > NOW(), false) AS penalty_active,
+      COALESCE((SELECT MAX(h.created_at) FROM report_review_history h WHERE h.issue_id = ir.issue_id),
+        ir.validated_at, ir.updated_at) AS last_review_at
+      FROM issue_reports ir
+      WHERE (ir.validated_at IS NOT NULL OR ir.status <> 'pending'
+        OR EXISTS (SELECT 1 FROM report_review_history h WHERE h.issue_id = ir.issue_id))
+        ${filter}
+      ORDER BY last_review_at DESC, ir.issue_id DESC LIMIT $1 OFFSET $2`, params);
+    return res.json({ success: true, reports: rows.slice(0, limit),
+      has_more: rows.length > limit, next_offset: offset + limit });
+  } catch (error) {
+    console.error('[Admin] Report history error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to load report history' });
+  }
+});
+
+router.get('/reports/:issueId/history', requireAdminAuth, async (req, res) => {
+  try {
+    const report = await dbGet(`SELECT ir.*,
+      COALESCE(ir.restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent,
+      COALESCE(ir.status IN ('validated','resolved') AND ir.penalty_revoked_at IS NULL
+        AND ir.restriction_until > NOW(), false) AS penalty_active
+      FROM issue_reports ir WHERE ir.issue_id = $1`, [req.params.issueId]);
+    if (!report) return res.status(404).json({ success: false, message: 'Report not found' });
+    const history = await dbAll(`SELECT h.*,
+      COALESCE(h.restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent
+      FROM report_review_history h WHERE issue_id = $1 ORDER BY review_id`, [req.params.issueId]);
+    return res.json({ success: true, report, history });
+  } catch (error) {
+    console.error('[Admin] Report review history error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to load review history' });
+  }
+});
+
+router.post('/reports/:issueId/undo-penalty', requireAdminAuth, [
+  body('reason').isString().trim().isLength({ min: 1, max: 800 })
+    .withMessage('Enter a reason for undoing the penalty (up to 800 characters).'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(422).json({ success: false, message: errors.array()[0].msg });
+  try {
+    const report = await undoReportPenalty(req.params.issueId, { reason: req.body.reason, adminId: req.adminId });
+    return res.json({ success: true, report,
+      message: 'Penalty undone for this report. Other active penalties still apply.' });
+  } catch (error) {
+    console.error('[Admin] Undo penalty error:', error.message);
+    return res.status(error.statusCode || 500).json({ success: false,
+      message: error.statusCode ? error.message : 'Unable to undo the penalty' });
+  }
+});
+
 router.patch('/reports/:issueId/status', requireAdminAuth, [
   body('status')
     .isIn(['pending','validated','rejected','resolved'])
@@ -259,10 +323,13 @@ router.patch('/reports/:issueId/status', requireAdminAuth, [
       adminNotes: req.body.adminNotes?.trim(),
       penaltyDuration: req.body.penaltyDuration,
       penaltySeverity: req.body.penaltySeverity,
+      adminId: req.adminId,
     });
 
     let message = 'Report status updated.';
-    if (updated.status === 'validated' && (updated.penalty_permanent || updated.restriction_until)) {
+    if (updated.status === 'validated' && updated.penalty_revoked_at) {
+      message = 'Report validated. Its previous penalty was undone and remains inactive.';
+    } else if (updated.status === 'validated' && (updated.penalty_permanent || updated.restriction_until)) {
       const penalty = penaltyTarget(updated) === 'passenger' ? 'Booking restriction' : 'Driver ride suspension';
       message = updated.penalty_permanent
         ? `Report validated. ${penalty} applied permanently.`
@@ -288,6 +355,17 @@ function reportDurationLabel(minutes) {
   return `${minutes} minutes`;
 }
 
+router.get('/analytics/destinations', requireAdminAuth, async (req, res) => {
+  try {
+    const days = clampInt(req.query.days, 30, 1, 365);
+    const destinations = await getDestinationPerformance({ days });
+    return res.json({ success: true, range_days: days, destinations });
+  } catch (error) {
+    console.error('[Admin] Destination analytics error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to load destination analytics' });
+  }
+});
+
 router.get('/analytics/routes', requireAdminAuth, async (req, res) => {
   try {
     const days = clampInt(req.query.days, 30, 1, 365);
@@ -309,7 +387,7 @@ router.get('/analytics/peak-hours', requireAdminAuth, async (req, res) => {
   try {
     const days = clampPeakInt(req.query.days, 30, 1, 365);
     const limit = clampPeakInt(req.query.limit, 6, 1, 24);
-    const hours = await getPeakHourAnalysis({ days, limit });
+    const hours = await getPeakHourAnalysis({ days, limit, period: req.query.period });
 
     return res.json({
       success: true,

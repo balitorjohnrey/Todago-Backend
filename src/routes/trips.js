@@ -174,6 +174,7 @@ router.get('/drivers/online', requireAuth, async (req, res) => {
            SELECT 1 FROM issue_reports ir
            WHERE ir.subject_role = 'driver' AND ir.subject_id = d.driver_id
              AND ir.status IN ('validated','resolved') AND ir.restriction_until > NOW()
+             AND ir.penalty_revoked_at IS NULL
          )
        ORDER BY gps.timestamp IS NULL ASC, d.avg_rating DESC`,
       []

@@ -117,7 +117,68 @@ async function getRoutePerformance({ todaId = null, days = 30, limit = 6 } = {})
   }));
 }
 
+// Destination demand uses successful rides only, across every pickup point.
+// Keep similarly named places in different areas separate; nearby bookings for
+// the same place share a ~110 m coordinate bucket. Missing GPS is never invented.
+async function getDestinationPerformance({ todaId = null, days = 30 } = {}) {
+  const params = [clampInt(days, 30, 1, 365)];
+  if (todaId) params.push(todaId);
+  const rows = await dbAll(`
+    WITH completed AS (
+      SELECT
+        LOWER(REGEXP_REPLACE(TRIM(COALESCE(NULLIF(TRIM(tr.destination), ''),
+          'Unknown destination')), '\\s+', ' ', 'g')) AS destination_key,
+        TRIM(COALESCE(NULLIF(TRIM(tr.destination), ''), 'Unknown destination')) AS destination,
+        CASE WHEN tr.destination_lat BETWEEN -90 AND 90
+                   AND tr.destination_lng BETWEEN -180 AND 180
+          THEN tr.destination_lat END AS lat,
+        CASE WHEN tr.destination_lat BETWEEN -90 AND 90
+                   AND tr.destination_lng BETWEEN -180 AND 180
+          THEN tr.destination_lng END AS lng,
+        COALESCE(tr.fare, 0) AS fare,
+        COALESCE(tr.end_timestamp, tr.request_timestamp) AS completed_at,
+        CASE WHEN tr.end_timestamp >= COALESCE(tr.pickup_timestamp, tr.request_timestamp)
+          THEN EXTRACT(EPOCH FROM
+            (tr.end_timestamp - COALESCE(tr.pickup_timestamp, tr.request_timestamp))) / 60.0
+          END AS trip_minutes
+      FROM trips tr
+      ${todaId ? 'JOIN drivers d ON d.driver_id = tr.driver_id' : ''}
+      WHERE tr.status = 'completed'
+        AND COALESCE(tr.end_timestamp, tr.request_timestamp)
+          >= NOW() - ($1::int * INTERVAL '1 day')
+        AND COALESCE(tr.end_timestamp, tr.request_timestamp) <= NOW()
+        ${todaId ? 'AND d.toda_id = $2' : ''}
+    )
+    SELECT
+      CONCAT(destination_key, ':', ROUND(lat::numeric, 3), ':', ROUND(lng::numeric, 3))
+        AS destination_id,
+      MIN(destination) AS destination,
+      AVG(lat) AS destination_lat,
+      AVG(lng) AS destination_lng,
+      COUNT(*) AS completed_trips,
+      ROUND((100.0 * COUNT(*) / SUM(COUNT(*)) OVER ())::numeric, 1) AS ride_share,
+      ROUND(SUM(fare)::numeric, 2) AS gross_revenue,
+      ROUND(AVG(trip_minutes)::numeric, 1) AS avg_trip_minutes,
+      MAX(completed_at) AS last_completed_at
+    FROM completed
+    GROUP BY destination_key, ROUND(lat::numeric, 3), ROUND(lng::numeric, 3)
+    ORDER BY completed_trips DESC, gross_revenue DESC, destination_id
+  `, params);
+  return rows.map(row => ({
+    destination_id: row.destination_id,
+    destination: row.destination,
+    destination_lat: row.destination_lat == null ? null : toNumber(row.destination_lat),
+    destination_lng: row.destination_lng == null ? null : toNumber(row.destination_lng),
+    completed_trips: toInt(row.completed_trips),
+    ride_share: toNumber(row.ride_share),
+    gross_revenue: toNumber(row.gross_revenue),
+    avg_trip_minutes: row.avg_trip_minutes == null ? null : toNumber(row.avg_trip_minutes),
+    last_completed_at: row.last_completed_at,
+  }));
+}
+
 module.exports = {
   clampInt,
   getRoutePerformance,
+  getDestinationPerformance,
 };

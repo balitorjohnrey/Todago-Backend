@@ -819,6 +819,7 @@ router.get('/analytics/peak-hours', requireDriverAuth, async (req, res) => {
       driverId: req.driverId,
       days,
       limit,
+      period: req.query.period,
     });
 
     return res.json({

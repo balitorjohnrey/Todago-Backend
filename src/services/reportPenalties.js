@@ -1,4 +1,4 @@
-const { dbGet } = require('../db/database');
+const { dbGet, pool } = require('../db/database');
 
 const penaltyDurations = {
   '1h': 60,
@@ -30,49 +30,101 @@ function penaltyMinutes(target, severity) {
   return null;
 }
 
-async function reviewIssueReport(issueId, { status, adminNotes, penaltyDuration, penaltySeverity = 'standard' }) {
-  const report = await dbGet('SELECT * FROM issue_reports WHERE issue_id = $1', [issueId]);
-  if (!report) {
-    const error = new Error('Report not found');
-    error.statusCode = 404;
-    throw error;
-  }
-  const target = penaltyTarget(report);
-  if (status === 'validated' && target && !report.subject_id) {
-    const error = new Error('This report has no linked account. Identify the reported passenger or driver before applying a penalty.');
-    error.statusCode = 422;
-    throw error;
-  }
-  const appliesPenalty = status === 'validated' && target !== null;
-  const usesLegacySeverity = appliesPenalty && penaltyDuration === undefined;
-  let minutes = null;
-  if (appliesPenalty) {
-    minutes = usesLegacySeverity ? penaltyMinutes(target, penaltySeverity) : penaltyDurations[penaltyDuration];
-  }
-  const permanent = appliesPenalty && penaltyDuration === 'permanent';
+function reportError(message, statusCode) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
 
-  // One atomic update records the decision and penalty together. Retrying a
-  // validation (even after expiry) never starts the same incident's timer again.
-  return dbGet(
-    `UPDATE issue_reports
-     SET status = $1,
-         admin_notes = $2,
-         validated_at = CASE WHEN $1 IN ('validated','rejected','resolved')
-           THEN COALESCE(validated_at, NOW()) ELSE validated_at END,
-         penalty_severity = CASE
-           WHEN restriction_until IS NULL AND ($4::integer IS NOT NULL OR $6::boolean) THEN $5
-           ELSE penalty_severity END,
-         penalty_minutes = CASE
-           WHEN restriction_until IS NULL AND ($4::integer IS NOT NULL OR $6::boolean) THEN $4::integer
-           ELSE penalty_minutes END,
-         restriction_until = COALESCE(restriction_until, CASE
-           WHEN $6::boolean THEN 'infinity'::timestamptz
-           ELSE NOW() + $4::integer * INTERVAL '1 minute' END),
-         updated_at = NOW()
-     WHERE issue_id = $3
-     RETURNING *, COALESCE(restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent`,
-    [status, adminNotes || null, issueId, minutes, usesLegacySeverity ? penaltySeverity : null, permanent]
-  );
+async function logReview(client, report, { action, previousStatus, adminId, notes }) {
+  await client.query(`INSERT INTO report_review_history
+    (issue_id, action, previous_status, status, admin_id, notes, penalty_minutes, restriction_until)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+  [report.issue_id, action, previousStatus, report.status, adminId || null,
+    notes || null, report.penalty_minutes, report.restriction_until]);
+}
+
+async function withLockedReport(issueId, operation) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const report = (await client.query(
+      `SELECT *, COALESCE(restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent
+       FROM issue_reports WHERE issue_id = $1 FOR UPDATE`, [issueId])).rows[0];
+    if (!report) throw reportError('Report not found', 404);
+    const result = await operation(client, report);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
+}
+
+async function reviewIssueReport(issueId, { status, adminNotes, penaltyDuration, penaltySeverity = 'standard', adminId }) {
+  return withLockedReport(issueId, async (client, report) => {
+    const target = penaltyTarget(report);
+    if (status === 'validated' && target && !report.subject_id) {
+      const error = new Error('This report has no linked account. Identify the reported passenger or driver before applying a penalty.');
+      error.statusCode = 422;
+      throw error;
+    }
+    const appliesPenalty = status === 'validated' && target !== null;
+    const usesLegacySeverity = appliesPenalty && penaltyDuration === undefined;
+    let minutes = null;
+    if (appliesPenalty) {
+      minutes = usesLegacySeverity ? penaltyMinutes(target, penaltySeverity) : penaltyDurations[penaltyDuration];
+    }
+    const permanent = appliesPenalty && penaltyDuration === 'permanent';
+
+    // The decision and audit event commit together. Retrying a
+    // validation (even after expiry) never starts the same incident's timer again.
+    const updated = (await client.query(
+      `UPDATE issue_reports
+       SET status = $1,
+           admin_notes = $2,
+           validated_at = CASE WHEN $1 IN ('validated','rejected','resolved')
+             THEN COALESCE(validated_at, NOW()) ELSE validated_at END,
+           penalty_severity = CASE
+             WHEN restriction_until IS NULL AND ($4::integer IS NOT NULL OR $6::boolean) THEN $5
+             ELSE penalty_severity END,
+           penalty_minutes = CASE
+             WHEN restriction_until IS NULL AND ($4::integer IS NOT NULL OR $6::boolean) THEN $4::integer
+             ELSE penalty_minutes END,
+           restriction_until = COALESCE(restriction_until, CASE
+             WHEN $6::boolean THEN 'infinity'::timestamptz
+             ELSE NOW() + $4::integer * INTERVAL '1 minute' END),
+           updated_at = NOW()
+       WHERE issue_id = $3
+       RETURNING *, COALESCE(restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent`,
+      [status, adminNotes === undefined ? report.admin_notes : adminNotes || null,
+        issueId, minutes, usesLegacySeverity ? penaltySeverity : null, permanent]
+    )).rows[0];
+    if (report.status !== updated.status || report.admin_notes !== updated.admin_notes ||
+        (!report.restriction_until && updated.restriction_until)) {
+      await logReview(client, updated, {
+        action: status === 'pending' ? 'reopened' : status,
+        previousStatus: report.status, adminId, notes: updated.admin_notes,
+      });
+    }
+    return updated;
+  });
+}
+
+async function undoReportPenalty(issueId, { reason, adminId }) {
+  return withLockedReport(issueId, async (client, report) => {
+    if (report.penalty_revoked_at) return report;
+    if (!report.restriction_until) throw reportError('This report has no penalty to undo.', 409);
+    const updated = (await client.query(`UPDATE issue_reports
+      SET penalty_revoked_at = NOW(), penalty_revoked_by = $2,
+        penalty_revoke_reason = $3, updated_at = NOW()
+      WHERE issue_id = $1
+      RETURNING *, COALESCE(restriction_until = 'infinity'::timestamptz, false) AS penalty_permanent`,
+    [issueId, adminId, reason])).rows[0];
+    await logReview(client, updated, { action: 'penalty_revoked',
+      previousStatus: report.status, adminId, notes: reason });
+    return updated;
+  });
 }
 
 async function getRideRestriction(role, accountId) {
@@ -86,6 +138,7 @@ async function getRideRestriction(role, accountId) {
      FROM issue_reports
      WHERE subject_role = ANY($1::text[]) AND subject_id = $2
        AND status IN ('validated','resolved') AND restriction_until > NOW()
+       AND penalty_revoked_at IS NULL
      ORDER BY restriction_until DESC
      LIMIT 1`,
     [roles, accountId]
@@ -119,4 +172,4 @@ function restrictionResponse(role, restriction) {
   };
 }
 
-module.exports = { isPenaltyDuration, penaltyTarget, penaltyMinutes, reviewIssueReport, getRideRestriction, restrictionResponse };
+module.exports = { isPenaltyDuration, penaltyTarget, penaltyMinutes, reviewIssueReport, undoReportPenalty, getRideRestriction, restrictionResponse };

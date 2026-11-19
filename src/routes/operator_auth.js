@@ -15,7 +15,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { dbRun, dbGet, dbAll } = require('../db/database');
 const { getDriverPerformance, getDriverPerformanceProfile } = require('../services/driverPerformance');
-const { clampInt, getRoutePerformance } = require('../utils/routeAnalytics');
+const { clampInt, getRoutePerformance, getDestinationPerformance } = require('../utils/routeAnalytics');
 const {
   clampInt: clampPeakInt,
   getPeakHourAnalysis,
@@ -701,6 +701,21 @@ router.get('/analytics/drivers/:driverId', requireOperatorAuth, async (req, res)
   }
 });
 
+router.get('/analytics/destinations', requireOperatorAuth, async (req, res) => {
+  try {
+    const op = await dbGet('SELECT toda_id FROM operators WHERE operator_id = $1', [req.operatorId]);
+    if (!op?.toda_id) {
+      return res.status(404).json({ success: false, message: 'Operator association not found' });
+    }
+    const days = clampInt(req.query.days, 30, 1, 365);
+    const destinations = await getDestinationPerformance({ todaId: op.toda_id, days });
+    return res.json({ success: true, range_days: days, destinations });
+  } catch (error) {
+    console.error('[Operator] Destination analytics error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to load destination analytics' });
+  }
+});
+
 router.get('/analytics/routes', requireOperatorAuth, async (req, res) => {
   try {
     const op = await dbGet(
@@ -734,7 +749,7 @@ router.get('/analytics/peak-hours', requireOperatorAuth, async (req, res) => {
       `SELECT toda_id FROM operators WHERE operator_id = $1`,
       [req.operatorId]
     );
-    if (!op) return res.status(404).json({ success: false, message: 'Operator not found' });
+    if (!op?.toda_id) return res.status(404).json({ success: false, message: 'Operator association not found' });
 
     const days = clampPeakInt(req.query.days, 30, 1, 365);
     const limit = clampPeakInt(req.query.limit, 6, 1, 24);
@@ -742,6 +757,7 @@ router.get('/analytics/peak-hours', requireOperatorAuth, async (req, res) => {
       todaId: op.toda_id,
       days,
       limit,
+      period: req.query.period,
     });
 
     return res.json({

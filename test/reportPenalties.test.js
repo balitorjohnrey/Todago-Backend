@@ -25,7 +25,7 @@ async function fixture(t) {
   const passenger = { id: 'passenger-1', full_name: 'Passenger One', is_active: true };
   const active = (roles, id) => [...state.reports.values()].filter(r => roles.includes(r.subject_role)
     && r.subject_id === id && ['validated', 'resolved'].includes(r.status)
-    && Date.parse(r.restriction_until) > state.now)
+    && !r.penalty_revoked_at && Date.parse(r.restriction_until) > state.now)
     .sort((a, b) => Date.parse(b.restriction_until) - Date.parse(a.restriction_until));
   const database = {
     async dbGet(raw, args = []) {
@@ -82,6 +82,22 @@ async function fixture(t) {
       return { rowCount: 1 };
     },
   };
+  let reviewQueue = Promise.resolve();
+  database.pool = { async connect() {
+    const previous = reviewQueue;
+    let unlock;
+    reviewQueue = new Promise(resolve => { unlock = resolve; });
+    await previous;
+    return {
+      release() { unlock(); },
+      async query(sql, args = []) {
+        if (['BEGIN','COMMIT','ROLLBACK'].includes(sql)) return { rows: [] };
+        if (sql.includes('INSERT INTO report_review_history')) return { rows: [] };
+        const row = await database.dbGet(sql, args);
+        return { rows: row ? [{ ...row }] : [] };
+      },
+    };
+  } };
   const penalties = loadWith('src/services/reportPenalties.js', { '../db/database': database });
   const reports = loadWith('src/utils/adminReports.js', { '../db/database': database });
   const stubs = { '../db/database': database, '../services/reportPenalties': penalties,
